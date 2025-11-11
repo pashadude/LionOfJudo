@@ -1,14 +1,36 @@
 # Phase 0: Proof of Concept Testing Guide
 
-**Goal:** Validate that vision AI can recognize judo techniques and technique errors BEFORE buying any hardware.
+**Goal:** Validate TWO separate approaches for judo technique recognition BEFORE buying any hardware.
 
-**Budget:** $20-30 for API testing
+**Budget:** $20-30 for API testing + GPU rental
 **Timeline:** 1-2 weeks
-**Success Criteria:** >70% technique recognition accuracy, identifies obvious errors, costs <$10 per 2-hour session
+**Success Criteria:** Choose best approach (vision LLM vs pose-based) with >70% accuracy and <$10/session cost
 
 ---
 
-## Week 1: Test Base Model Recognition
+## Two Parallel Approaches to Test
+
+### Approach A: Vision LLMs (OpenRouter)
+- Send raw video frames to GPT-4V/Claude/Gemini
+- Models "look at" the video like a human coach would
+- No pose estimation needed
+- **Pros:** Simple, no GPU needed, models understand context
+- **Cons:** More expensive per frame, might miss subtle details
+
+### Approach B: YOLO11 Pose + Analysis
+- Run YOLO11 pose estimation to extract skeleton keypoints
+- Analyze pose sequences to classify techniques
+- **Pros:** Cheaper, more precise biomechanics, can measure angles
+- **Cons:** Requires GPU, more complex pipeline, harder to detect context
+
+### Hybrid Approach (Best of Both)
+- YOLO11 pose for motion detection & frame filtering
+- Vision LLM for technique recognition on filtered frames
+- Combine: cheap motion filtering + smart recognition
+
+---
+
+## Week 1A: Test Vision LLM Recognition (OpenRouter)
 
 ### Task 1: Collect Test Videos (2-3 hours)
 
@@ -358,6 +380,220 @@ python3 test_recognition.py
 
 ---
 
+## Week 1B: Test YOLO11 Pose Estimation (Parallel Track)
+
+**Goal:** Test if pose-based approach can recognize techniques from skeleton data
+
+### Where to Run YOLO11 Pose?
+
+**Option 1: OVHcloud AI Endpoints (Managed)**
+- Pre-deployed YOLO11 models available
+- Available models:
+  - `yolov11x-object-detection` - Detects people (bounding boxes)
+  - `yolov11x-image-segmentation` - Pixel-level segmentation
+  - **Missing:** YOLO11 pose model (17 keypoint skeleton)
+- **Verdict:** OVHcloud doesn't have pose model yet - need Option 2 or 3
+
+**Option 2: Rent GPU and Run YOLO11 Pose (Self-Hosted)**
+- Hetzner GPU servers or RunPod/Vast.ai
+- Install Ultralytics YOLO11
+- Run pose estimation locally
+- **Cost:** ~$0.50-1.00/hour GPU time
+- **For testing:** 10 hours = $5-10
+
+**Option 3: Google Colab Free GPU**
+- Free Tesla T4 GPU for testing
+- Install YOLO11, upload test videos
+- Export pose data
+- **Cost:** $0 (free tier)
+- **Limitation:** Session timeout after ~12 hours
+
+**Recommendation for Phase 0:** Use Google Colab (free) for initial testing
+
+---
+
+### Task 1: Setup YOLO11 Pose on Google Colab
+
+Create a Colab notebook:
+
+```python
+# Install Ultralytics
+!pip install ultralytics opencv-python
+
+from ultralytics import YOLO
+import cv2
+import json
+from pathlib import Path
+
+# Load YOLO11 pose model
+model = YOLO('yolo11x-pose.pt')  # Largest, most accurate
+
+# Upload your test video to Colab
+# Or download from YouTube
+!yt-dlp -f 'best[height<=1080]' -o 'test_judo.mp4' 'YOUTUBE_URL'
+
+# Run pose estimation
+results = model.predict(
+    source='test_judo.mp4',
+    save=True,
+    conf=0.5,  # Confidence threshold
+    iou=0.7,   # NMS threshold
+    show_labels=True,
+    show_conf=True
+)
+
+# Extract pose data
+pose_data = []
+for frame_idx, result in enumerate(results):
+    if result.keypoints is not None:
+        for person_idx, kpts in enumerate(result.keypoints.data):
+            # kpts shape: [17, 3] (x, y, confidence for each of 17 keypoints)
+            pose_data.append({
+                "frame": frame_idx,
+                "person": person_idx,
+                "keypoints": kpts.cpu().numpy().tolist()
+            })
+
+# Save pose data
+with open('pose_data.json', 'w') as f:
+    json.dump(pose_data, f)
+
+print(f"Extracted pose data for {len(pose_data)} person-frames")
+```
+
+**Output:** Video with skeleton overlay + JSON file with all keypoints
+
+---
+
+### Task 2: Analyze Pose Data Quality
+
+**Questions to Answer:**
+
+1. **Detection Rate**
+   - How many frames have 2+ people detected? (for technique interaction)
+   - Any missed detections when athletes occlude each other?
+
+2. **Keypoint Accuracy**
+   - Are hips, knees, ankles detected correctly?
+   - Critical for measuring "hip too low" in harai-goshi
+   - Check keypoint confidence scores
+
+3. **Temporal Consistency**
+   - Do keypoints jump around frame-to-frame?
+   - Or smooth trajectories?
+   - Jitter = bad for measuring angles
+
+**Evaluation Script:**
+
+```python
+import json
+import numpy as np
+
+with open('pose_data.json') as f:
+    poses = json.load(f)
+
+# Group by person across frames
+from collections import defaultdict
+person_tracks = defaultdict(list)
+
+for p in poses:
+    person_tracks[p['person']].append({
+        'frame': p['frame'],
+        'keypoints': p['keypoints']
+    })
+
+# Analyze each person's track
+for person_id, track in person_tracks.items():
+    print(f"\nPerson {person_id}:")
+    print(f"  Frames detected: {len(track)}")
+
+    # Calculate average confidence per keypoint
+    kpt_confidences = np.array([t['keypoints'] for t in track])[:, :, 2]
+    avg_conf = kpt_confidences.mean(axis=0)
+
+    print(f"  Hip confidence: {avg_conf[11:13].mean():.2f}")  # Left/right hip
+    print(f"  Knee confidence: {avg_conf[13:15].mean():.2f}")
+    print(f"  Ankle confidence: {avg_conf[15:17].mean():.2f}")
+```
+
+---
+
+### Task 3: Can Pose Data Recognize Techniques?
+
+**Simple Heuristic Test:** Can we distinguish seoi-nage from uchi-mata using just pose?
+
+```python
+def detect_throw_type(pose_sequence):
+    """
+    Simple rule-based classifier using pose features
+    pose_sequence: list of keypoints over 30 frames (1 second)
+    """
+    # Extract key features
+    hip_heights = []
+    leg_angles = []
+
+    for pose in pose_sequence:
+        left_hip = pose[11]  # (x, y, conf)
+        right_hip = pose[12]
+        left_knee = pose[13]
+        right_knee = pose[14]
+
+        # Hip height (y coordinate, lower = higher in image)
+        hip_heights.append((left_hip[1] + right_hip[1]) / 2)
+
+        # Leg angle (simplified)
+        # ...calculate based on hip-knee-ankle
+
+    # Heuristic rules:
+    avg_hip_height = np.mean(hip_heights)
+    hip_drop = max(hip_heights) - min(hip_heights)
+
+    if hip_drop > 50:  # pixels - significant hip drop
+        if avg_hip_height < 400:  # low hip position
+            return "likely_seoi_nage_or_tai_otoshi"
+        else:
+            return "likely_harai_goshi_or_uchi_mata"
+    else:
+        return "no_throw_detected"
+
+# Test on your extracted sequences
+# ...
+```
+
+**Expected Result:** 40-60% accuracy with simple rules (proves pose has signal)
+
+---
+
+### Task 4: Cost Comparison
+
+**YOLO11 Pose + Analysis:**
+```
+2-hour video (7200 frames at 30fps):
+- GPU inference: ~10 min on RTX 4090
+- Cost: $0.50/hour × 0.17 hours = $0.085
+- Storage: Pose JSON file ~5 MB (vs 24 GB video)
+- Then send filtered frames to Vision LLM
+```
+
+**Vision LLM Only:**
+```
+2-hour video:
+- Send 2000 key frames to Gemini Flash
+- Cost: 2000 × $0.00002 = $0.04
+- Simpler pipeline, no GPU needed
+```
+
+**Hybrid (Best of Both):**
+```
+- YOLO pose for motion detection: $0.09
+- Filter to 500 "high confidence technique" frames
+- Send 500 frames to Gemini Flash: $0.01
+- Total: $0.10 per session
+- Get both: precise biomechanics + contextual understanding
+```
+
+---
+
 ## Week 2: Optimize for Cost & Accuracy
 
 ### Task 5: Motion Detection (Reduce Frame Count)
@@ -562,15 +798,62 @@ See **LORA_FINETUNING.md** for complete guide.
 
 ---
 
-## Phase 0 Success Criteria Checklist
+## Phase 0 Final Decision Matrix
 
-Before moving to Phase 1 (buying hardware), confirm:
+After completing Week 1A (Vision LLM) and Week 1B (YOLO Pose), choose your approach:
 
+### Comparison Table
+
+| Criteria | Vision LLM Only | YOLO Pose + Rules | Hybrid (YOLO + LLM) |
+|----------|----------------|-------------------|---------------------|
+| **Technique Recognition Accuracy** | 70-80% | 40-60% | 75-85% |
+| **Error Detection (subtle)** | Medium (depends on model) | High (measures angles) | Best of both |
+| **Cost per 2-hr session** | $0.04-0.50 | $0.09 (GPU) | $0.10-0.15 |
+| **Infrastructure needed** | None (API only) | GPU server | GPU + API |
+| **Implementation complexity** | Low | Medium | High |
+| **Biomechanical measurements** | Limited | Excellent | Excellent |
+| **Context understanding** | Excellent | Poor | Excellent |
+
+### Recommended Approaches by Budget
+
+**Tight Budget (Serbian schools - <$5/session):**
+- ✅ **Vision LLM Only** (Gemini Flash)
+- Cost: ~$0.04/session
+- Trade-off: Less precise biomechanics, but good enough for technique ID
+- Simple to deploy
+
+**Medium Budget ($10-20/session):**
+- ✅ **Hybrid Approach**
+- YOLO pose for motion detection + angle measurement
+- Vision LLM for technique recognition
+- Best overall quality
+
+**Focus on Biomechanics (research/elite training):**
+- ✅ **YOLO Pose + Custom Classifier**
+- Precise joint angle measurements
+- Train classifier on pose sequences
+- Can export data for further analysis
+
+### Phase 0 Success Criteria Checklist
+
+**For Vision LLM Approach:**
 - [ ] Base model recognizes >70% of technique names correctly
 - [ ] Model detects obvious errors (hip height, timing, foot placement) >60% of time
 - [ ] Motion detection reduces frames by >60%
-- [ ] Estimated cost per 2-hour session < $10
+- [ ] Estimated cost per 2-hour session < $5 (Gemini) or < $20 (Claude/GPT-4V)
 - [ ] Processing time estimate < 30 minutes for frame extraction + API calls
+
+**For YOLO Pose Approach:**
+- [ ] YOLO detects 2+ people in >80% of technique attempt frames
+- [ ] Hip/knee/ankle keypoints have >70% confidence
+- [ ] Simple heuristic rules achieve >50% technique classification
+- [ ] GPU inference cost < $0.10/session
+- [ ] Pose data exports correctly for analysis
+
+**For Hybrid Approach:**
+- [ ] All criteria from both above approaches met
+- [ ] Pipeline successfully combines YOLO filtering → LLM recognition
+- [ ] Total cost < $10/session
 
 **If all checked → BUY PHASE 1 HARDWARE ($431)**
 
