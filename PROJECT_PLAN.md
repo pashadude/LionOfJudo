@@ -87,19 +87,38 @@ Pi Pico (Master Clock)
 
 This is the core intelligence layer that transforms raw synchronized video into actionable training insights.
 
-#### 2.1 Upload & Storage
+**Architecture Decision: Hetzner + OpenRouter (Cost-Optimized)**
+
+Instead of AWS and self-hosted ML models, we use:
+- **Hetzner Storage Box:** Ultra-cheap storage (€3.81/TB/month = ~$4.20/TB/month)
+- **Hetzner Dedicated Server:** Single server for processing (starting at €40/month)
+- **OpenRouter API:** Vision-capable AI models (GPT-4V, Claude 3.5 Sonnet, Gemini) for recognition
+
+This eliminates:
+- ❌ Training custom ML models (months of work)
+- ❌ GPU infrastructure costs ($100s/month)
+- ❌ Model maintenance and updates
+- ❌ Complex MLOps pipelines
+
+#### 2.1 Upload & Storage (Hetzner)
 
 **Workflow:**
 1. Training session ends
 2. Coach triggers upload script on primary Pi
-3. All 6 Pis upload H.265 files to cloud storage (AWS S3 / Google Cloud Storage)
-4. Processing pipeline automatically triggered on upload completion
+3. All 6 Pis upload H.265 files via SFTP/rsync to Hetzner Storage Box
+4. Upload triggers processing job on Hetzner server
 
-**Monthly Storage Cost:**
+**Monthly Storage Cost (Hetzner Storage Box):**
 - Example: 2 hours/day, 3 days/week
 - 12 GB/hour × 2 hours × 3 days × 4 weeks = 288 GB/month
-- AWS S3: 288 GB × $0.023/GB = **~$6.62/month**
-- Cost grows linearly with video retention (archive old sessions to Glacier for $0.004/GB)
+- Hetzner: €3.81 per 1TB/month = **~$0.90/month for 288 GB**
+- **90% cheaper than AWS S3**
+
+**Storage Box Specs:**
+- 1TB Box: €3.81/month (~$4.20/month)
+- Access: SFTP, rsync, WebDAV, Samba
+- Snapshots included
+- Enough for ~40 training sessions before needing to archive
 
 #### 2.2 Judo Movement Recognition (Core AI System)
 
@@ -116,94 +135,247 @@ This is the core intelligence layer that transforms raw synchronized video into 
 
 ---
 
-#### 2.3 AI/ML Architecture
+#### 2.3 AI/ML Architecture (OpenRouter-Based)
 
-**Stage 1: Person Detection & Pose Estimation**
+**Revolutionary Approach: Vision LLMs Replace Custom Models**
 
-**YOLO-11 Pose Model**
-- **Purpose:** Real-time detection of all people in frame + 17-keypoint skeletal pose
-- **Why YOLO-11:**
-  - State-of-the-art speed/accuracy (critical for 6 video streams)
-  - Native pose estimation (no separate model needed)
-  - Handles occlusions and multiple people in frame
-- **Output:** Bounding boxes + skeleton coordinates for each athlete per frame
+Instead of training specialized computer vision models, we leverage state-of-the-art vision-capable LLMs via OpenRouter API. This is **dramatically simpler and cheaper**.
 
-**MediaPipe Holistic (Supplementary)**
-- **Purpose:** Enhanced detail for specific frames requiring fine-grained analysis
-- **Use Cases:**
-  - Hand grip detection (important for certain throws like morote-seoi-nage)
-  - Facial landmark tracking (for pupil dilation analysis - see Stage 4)
-  - Body angle refinement for scoring movement quality
-- **Why Not Primary:** Too computationally expensive to run on all frames; use selectively
+**Why OpenRouter:**
+- Access to best vision models: GPT-4V, Claude 3.5 Sonnet, Gemini 1.5 Pro
+- No training data collection needed
+- No GPU infrastructure
+- Models already understand human movement, sports, and can follow complex instructions
+- Pay only for what you use (~$0.01-0.03 per image depending on model)
 
-**Processing Strategy:**
+**Cost-Optimized Processing Strategy:**
+
+We don't send every frame to the API (that would be expensive). Instead:
+
 ```
-For each frame from 6 cameras:
-├─ YOLO-11 (always): Fast person detection + skeleton
-└─ MediaPipe (conditionally): Only when:
-    - Technique initiation detected (need grip detail)
-    - Face visible (for pupil analysis)
-    - Quality scoring required (need precise joint angles)
+For each camera video (2 hours = 216,000 frames at 30fps):
+├─ Extract 1 frame per second = 7,200 frames
+├─ Run cheap motion detection locally (OpenCV)
+├─ Identify "action segments" (movement > threshold)
+├─ Send only action frames to OpenRouter (~2,000 frames per 2-hour session)
+└─ Cost: 2,000 frames × 6 cameras × $0.015/frame = ~$180/session
 ```
+
+**Further Cost Optimization:**
+- Use motion detection to identify only moments with athlete interaction
+- Send multi-angle grid image (6 camera views in one image) = 1/6 the cost
+- Use cheaper models (Gemini Flash 2.0 = $0.00001875/image!)
+- **Optimized cost: ~$30-50 per session**
 
 ---
 
-**Stage 2: 3D Pose Reconstruction**
+**Stage 1: Frame Extraction & Motion Detection (Local on Hetzner)**
 
-**Purpose:** Combine 2D poses from 6 camera angles into single 3D skeletal model.
+**Process:**
+1. Upload complete: 6 video files on Hetzner Storage Box
+2. Hetzner server runs FFmpeg to extract frames:
+   ```bash
+   ffmpeg -i video.mp4 -vf fps=1 frames/frame_%04d.jpg
+   ```
+3. OpenCV motion detection identifies "active" periods:
+   - Frame differencing between consecutive frames
+   - Threshold for significant movement
+   - Output: List of frame timestamps with activity
+4. Extract high-res frames at key moments (technique attempts)
 
-**Method:** Multi-view triangulation
-- Use camera calibration data (intrinsic + extrinsic parameters)
-- Match skeletons across views using spatial-temporal consistency
-- Triangulate corresponding 2D keypoints → 3D joint coordinates
-- Apply Kalman filtering to reduce jitter
-
-**Output:** 3D skeleton trajectories for every athlete in the training space
-
-**Critical Dependency:** Hardware-synced cameras (this is why the Pi Pico is non-negotiable)
+**Output:** ~500-2000 key frames per camera per session
 
 ---
 
-**Stage 3: Technique Classification**
+**Stage 2: Multi-View Image Preparation**
 
-**Challenge:** Judo techniques are highly complex, context-dependent sequences.
+**Problem:** Sending 6 separate images per moment = 6× API cost
 
-**Approach: Hybrid Classification System**
+**Solution:** Stitch camera views into single grid image
+```
++----------+----------+----------+
+| Camera 1 | Camera 2 | Camera 3 |
++----------+----------+----------+
+| Camera 4 | Camera 5 | Camera 6 |
++----------+----------+----------+
+```
 
-**3A: Temporal Action Detection**
-- **Model:** 3D CNN (e.g., X3D or SlowFast) trained on 3D skeleton sequences
-- **Input:** 2-3 second windows of 3D joint trajectories
-- **Output:** Technique class + temporal boundaries (start/end frames)
+**Benefit:** Single API call sees all angles simultaneously
+- Better context for technique recognition
+- 6× cost reduction
+- LLM can reason about 3D positioning from multiple views
 
-**Training Data Requirements:**
-- Need labeled video dataset of all 120 techniques
-- Minimum ~50 examples per technique from multiple athletes
-- **Bootstrapping strategy:**
-  - Start with publicly available judo competition footage
-  - Augment with your own training sessions (manually labeled initially)
-  - Active learning: Model flags uncertain predictions for manual review
+---
 
-**3B: Technique-Specific Classifiers**
-- Some techniques are ambiguous (e.g., tai-otoshi vs. seoi-nage variations)
-- Train specialized binary classifiers for confusable pairs
-- Use biomechanical features:
-  - Hip rotation angle
-  - Foot placement patterns
-  - Center-of-mass trajectory
-  - Contact points between athletes
+**Stage 3: Technique Recognition via OpenRouter**
+
+**Prompt Engineering Strategy:**
+
+```python
+prompt = f"""
+You are analyzing a judo training session from 6 synchronized camera angles.
+
+Reference: There are 120 standard judo techniques:
+- 80 tachi-waza (standing techniques): seoi-nage, tai-otoshi, uchi-mata, etc.
+- 40 ne-waza (ground techniques): kesa-gatame, juji-gatame, etc.
+
+Frame timestamp: {timestamp}
+Previous context: {previous_techniques}
+
+Analyze this multi-angle frame and identify:
+
+1. **Technique Identification:**
+   - What judo technique is being attempted? (Be specific: e.g., "ippon seoi-nage" not just "seoi-nage")
+   - Who is tori (thrower) and who is uke (receiver)?
+   - Confidence level (0-100%)
+
+2. **Technique Phase:**
+   - Is this: setup/kuzushi, entry/tsukuri, execution/kake, or follow-through?
+
+3. **Movement Quality (1-10 scale):**
+   - Posture and balance
+   - Timing and rhythm
+   - Technical correctness (compare to ideal form)
+
+4. **Key Observations:**
+   - What is done well?
+   - What needs improvement?
+   - Specific body positions (hip angle, foot placement, grip)
+
+Respond in JSON format.
+"""
+```
+
+**API Call:**
+```python
+response = openrouter.chat.completions.create(
+    model="anthropic/claude-3.5-sonnet",  # or google/gemini-flash-1.5
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": base64_image}}
+        ]
+    }]
+)
+```
 
 **Output Example:**
 ```json
 {
-  "timestamp": "00:03:47.2 - 00:03:48.1",
-  "technique": "Ippon Seoi Nage",
-  "confidence": 0.92,
+  "timestamp": "00:03:47",
+  "technique": {
+    "name": "Ippon Seoi Nage (One-arm shoulder throw)",
+    "category": "tachi-waza",
+    "subcategory": "te-waza (hand technique)",
+    "confidence": 87
+  },
   "athletes": {
-    "tori": "Athlete_03",  // person executing throw
-    "uke": "Athlete_07"     // person being thrown
+    "tori": "Athlete in white gi (left side of camera 1)",
+    "uke": "Athlete in blue gi"
+  },
+  "phase": "kake (execution)",
+  "quality_score": {
+    "overall": 7,
+    "posture": 8,
+    "timing": 6,
+    "technical_correctness": 7
+  },
+  "observations": {
+    "strengths": [
+      "Good hip positioning below uke's center of gravity",
+      "Strong kuzushi (off-balancing) in setup"
+    ],
+    "improvements": [
+      "Entry step slightly too wide - reduces rotational power",
+      "Right arm pull could be more circular rather than straight back"
+    ],
+    "body_mechanics": {
+      "hip_angle": "~110 degrees (good)",
+      "foot_placement": "Left foot between uke's feet (correct)",
+      "grip": "Standard ippon grip visible"
+    }
   }
 }
 ```
+
+---
+
+**Stage 3B: Optional LoRA Fine-Tuning (Phase 1.5)**
+
+**When Needed:** If base models can't detect subtle technique errors (<70% accuracy)
+
+**The Problem:**
+- Base vision LLMs know general judo techniques
+- They might miss critical coaching details:
+  - "Harai-goshi with hip too high" (looks like harai-goshi, but wrong)
+  - "Seoi-nage without proper kuzushi" (technically correct entry, but setup failed)
+  - "Uchi-mata with weak sweep" (identified correctly but quality assessment poor)
+
+**The Solution: LoRA (Low-Rank Adaptation)**
+- Fine-tune existing vision model on YOUR judo footage
+- Teach it to spot specific errors common in beginner/intermediate judoka
+- Much cheaper than training from scratch
+
+**Dataset Requirements:**
+- **500-1000 labeled images** (not 5 hours of video!)
+- 50-100 examples per major technique
+- Mix of correct and incorrect execution
+- Specific error labels
+
+**Example Training Data:**
+```json
+{
+  "image": "harai_goshi_beginner_003.jpg",
+  "technique": "harai-goshi",
+  "execution_quality": "poor",
+  "specific_errors": [
+    {
+      "error": "hip_position_too_high",
+      "severity": "critical",
+      "description": "Tori's hip is at same height as uke's hip. Should be 20cm lower for effective throw."
+    },
+    {
+      "error": "timing_late",
+      "severity": "moderate",
+      "description": "Leg sweep initiated after uke recovered balance from kuzushi."
+    }
+  ],
+  "correct_aspects": [
+    "grip is correct",
+    "foot placement acceptable"
+  ]
+}
+```
+
+**LoRA Training Options:**
+
+| Approach | Cost | Effort | Inference Cost | Best For |
+|----------|------|--------|----------------|----------|
+| **GPT-4V Fine-tune** | $30-50 one-time | Low | $0.006/image | Quick start, works immediately |
+| **Gemini Fine-tune** | TBD | Low | ~$0.00005/image | When Google releases it (cheapest) |
+| **Open Source (LLaVA/Idefics)** | Free | High | Free (self-hosted) | Long-term if budget is critical |
+
+**Recommendation:**
+1. Start with base GPT-4V or Gemini Flash in Phase 0
+2. If error detection < 70% → collect 500 labeled images from YouTube + your first sessions
+3. Fine-tune GPT-4V with LoRA (~$40 total cost)
+4. New model: "gpt-4v-judocoach-v1" specialized for your needs
+5. Inference cost increase: $0.00002 → $0.006 per image (300× more expensive)
+6. **But**: If this catches errors base model misses → worth it for coaching value
+
+**LoRA Training Process:**
+1. Collect 500-1000 images (1-2 weeks with help from coaches)
+2. Label using simple web tool (see LORA_FINETUNING.md)
+3. Upload to OpenAI fine-tuning API
+4. Training takes 2-6 hours
+5. Test on validation set
+6. Deploy in production pipeline
+
+**Cost-Benefit Analysis:**
+- Base model: $5/session, 70% error detection
+- LoRA model: $30/session, 90% error detection
+- **Decision:** For wealthy clubs → use LoRA. For Serbian schools → use base model + manual coach review of flagged techniques
 
 ---
 
@@ -332,64 +504,130 @@ Power Index = (throw_velocity × uke_mass_estimate) / execution_time
 
 ---
 
-## Cost Summary
+## Cost Summary (Revised - Much Cheaper!)
 
 ### One-Time Hardware Investment
 
-| Category | Cost |
-|----------|------|
-| 6-Camera Sync System | $832 |
-| Audio Equipment (Bluetooth mic) | ~$50 |
-| **Total** | **~$882** |
+| Phase | Hardware | Cost |
+|-------|----------|------|
+| **Phase 0 (Proof of Concept)** | Use YouTube videos - no hardware | **$0** |
+| **Phase 1 (MVP for 1 school)** | 3-camera sync system | **$431** |
+| **Phase 3 (Scale to 5 schools)** | 5× 3-camera kits | **$2,155** |
+| **Optional upgrade to 6 cameras** | +3 cameras per school | +$186/school |
 
-### Recurring Monthly Costs
+### Recurring Monthly Costs (Per School)
 
-| Service | Cost (Example Usage) |
-|---------|---------------------|
-| Cloud Storage | ~$7/month (288 GB/month new data) |
-| Cloud Compute (AI inference) | ~$20-50/month (depends on GPU pricing - estimate 10 hours GPU time/month) |
-| **Total** | **~$27-57/month** |
+| Service | Cost (3 sessions/week, 2 hrs each) |
+|---------|-------------------------------------|
+| Hetzner Storage Box (1TB) | €3.81 (~$4.20/month) |
+| OpenRouter API (Gemini Flash) | ~$5-10/month |
+| **Total per school** | **~$9-14/month** |
 
-**Note:** AI processing costs scale with training frequency. Above estimate assumes 3 sessions/week × 2 hours each.
+**Shared Hetzner Server (All Schools):**
+- 1× Dedicated server: ~€40/month (~$44/month) shared across all schools
+- Total for 5 schools: ~$44 + (5 × $12) = **~$104/month total**
+- **Per school: ~$21/month**
+
+**Phase 0 Testing Cost:**
+- Process 20 YouTube videos (~10 hours of footage)
+- Estimated: $10-20 total to validate the concept
 
 ---
 
-## Implementation Phases & Timeline
+## Implementation Phases & Timeline (Simplified)
 
-### Phase 1: MVP (Months 1-3)
-**Goal:** Prove the core concept works
+### Phase 0: Proof of Concept (Week 1-2) - $0 Hardware Cost
+**Goal:** Validate that OpenRouter can recognize judo techniques from video
+
+**Approach:**
+- Download 10-20 YouTube videos of judo training/competitions
+- Extract key frames (1 per second during action)
+- Test OpenRouter API with different prompts and models
+- Compare Gemini Flash ($0.00001875/image) vs Claude 3.5 Sonnet ($0.004/image) accuracy
 
 **Deliverables:**
-- [ ] Build and test 6-camera hardware sync (Week 1-2)
-- [ ] Implement video capture and upload pipeline (Week 3-4)
-- [ ] Train YOLO-11 pose model on judo footage (Week 5-8)
-- [ ] Build basic 3D reconstruction pipeline (Week 9-10)
-- [ ] Classify 10 most common techniques (Week 11-12)
-- [ ] Create simple dashboard showing detected techniques + video clips
+- [ ] Python script to extract frames from video
+- [ ] OpenRouter integration with technique recognition prompt
+- [ ] Cost analysis: actual $ per technique recognized
+- [ ] Accuracy report: can it distinguish seoi-nage from tai-otoshi?
 
 **Success Criteria:**
-- 6 cameras recording in <10ms sync
-- System recognizes 10 techniques with >80% accuracy
-- Dashboard ready 6 hours after session
+- LLM correctly identifies at least 7/10 common techniques from single angles
+- Cost <$5 to process 2 hours of footage
+- If this fails, we pivot before buying any hardware
 
-### Phase 2: Production System (Months 4-6)
-**Goal:** Full 120-technique recognition + quality scoring
+---
+
+### Phase 1: Minimum Viable System (Weeks 3-6) - $280 Hardware
+**Goal:** Build simplest possible working system for one dojo
+
+**Hardware (Start with 3 cameras, not 6):**
+| Component | Quantity | Unit Cost | Total |
+|-----------|----------|-----------|-------|
+| Raspberry Pi 4 (4GB) | 3 | $65 | $195 |
+| Arducam Global Shutter | 3 | $40 | $120 |
+| MicroSD Cards | 3 | $12 | $36 |
+| Pi Pico (sync) | 1 | $20 | $20 |
+| Power supplies | 3 | $10 | $30 |
+| Basic switch + cables | 1 | $30 | $30 |
+| **Total** | | | **$431** |
+
+**Why 3 cameras?**
+- Front, side, back = enough to see most techniques
+- Still hardware-synced (Pi Pico to 3 cameras)
+- 1/2 the cost of 6-camera system
+- Can add 3 more later if it works
 
 **Deliverables:**
-- [ ] Expand technique library to all 120 techniques
-- [ ] Implement movement quality scoring algorithm
-- [ ] Add power measurement calculations
-- [ ] Integrate audio capture + coach voice timestamps
-- [ ] Reduce processing time to 4-5 hours
+- [ ] 3-camera sync system working
+- [ ] Auto-upload to Hetzner Storage Box (1TB = €3.81/month)
+- [ ] Frame extraction + motion detection
+- [ ] OpenRouter batch processing script
+- [ ] Simple HTML report: list of techniques with timestamps + quality scores
 
-### Phase 3: Advanced Features (Months 7-9)
-**Goal:** Biometrics and predictive insights
+**Success Criteria:**
+- Process 1-hour session in under 3 hours
+- Cost <$10 per session in OpenRouter fees
+- Coaches can identify their athletes' techniques in the report
+
+---
+
+### Phase 2: Dashboard & Multi-Athlete Tracking (Weeks 7-10)
+**Goal:** Make it actually usable for daily training
 
 **Deliverables:**
-- [ ] Integrate Polar H10 heart rate data
-- [ ] Add pupil dilation tracking (if feasible)
-- [ ] Build trend analysis (athlete progress over time)
-- [ ] Add predictive insights ("Athlete_X likely to improve uchi-mata based on pattern similarity to Athlete_Y's development")
+- [ ] Simple React dashboard (replace HTML report)
+- [ ] Video player that jumps to technique timestamps
+- [ ] Athlete identification (manual tagging at session start)
+- [ ] Progress tracking: compare quality scores over time
+- [ ] Export reports as PDF for parents
+
+**No new hardware needed** - same 3-camera setup
+
+---
+
+### Phase 3: Scale to Multiple Schools (Months 3-6)
+**Goal:** Deploy to 3-5 schools in Serbia
+
+**Considerations:**
+- Build 3-5 identical 3-camera kits
+- Shared Hetzner server processes all schools' videos
+- Each school uploads to their own folder
+- Dashboard shows per-school and per-athlete views
+
+**Optional Upgrades (only if budget allows):**
+- Add 3 more cameras per school (total 6) for better coverage
+- Audio capture (coach microphone)
+- Biometrics (Polar H10 straps) - probably Phase 4
+
+---
+
+### Phase 4: Advanced Features (Month 6+)
+**Only add if Phase 1-3 proves valuable:**
+- Heart rate integration
+- Comparative analysis (athlete vs athlete)
+- Video highlight reels (auto-generated "best throws of the month")
+- Mobile app for parents
 
 ---
 
@@ -477,13 +715,52 @@ LionOfJudo/
 
 ---
 
-## Next Immediate Actions
+## Next Immediate Actions (Phase 0 - Start This Week!)
 
-1. **Order Hardware:** Purchase 1x full 6-camera setup for prototyping (~$900)
-2. **Build Sync Prototype:** Test Pi Pico → 2 camera trigger (validate <10ms sync)
-3. **Collect Training Data:** Film 5 hours of judo training with technique labels
-4. **Set Up Cloud Pipeline:** AWS account + S3 bucket + EC2 GPU instance
-5. **Test YOLO-11:** Run pose estimation on sample footage - measure accuracy/speed
+**No hardware purchase until we validate the concept!**
+
+### Week 1: Validate OpenRouter Can Recognize Judo
+
+1. **Download Test Videos** (~2 hours)
+   - Get 10-20 YouTube videos of judo training/competition
+   - Mix of tachi-waza and ne-waza
+   - Different camera angles and quality levels
+
+2. **Build Frame Extraction Script** (~3 hours)
+   ```bash
+   # Simple FFmpeg command
+   ffmpeg -i video.mp4 -vf fps=1 frames/frame_%04d.jpg
+   ```
+
+3. **Test OpenRouter API** (~4 hours)
+   - Sign up for OpenRouter account (add $20 credit)
+   - Test 3 models: Gemini Flash, Claude 3.5 Sonnet, GPT-4V
+   - Send 100 frames with judo technique recognition prompt
+   - Measure: accuracy, cost per frame, speed
+
+4. **Create Simple Report** (~2 hours)
+   - Which model is most accurate?
+   - Which is cheapest?
+   - Can it distinguish similar techniques (seoi-nage vs tai-otoshi)?
+   - Estimated cost to process 2-hour training session
+
+**Decision Point:** If accuracy >70% and cost <$10/session → proceed to Phase 1
+
+### Week 2: Refine Prompt & Motion Detection
+
+5. **Improve Prompt Engineering** (~4 hours)
+   - Add examples of each technique to prompt
+   - Test multi-shot prompting (show reference images)
+   - Test with/without telling LLM about previous frames (context)
+
+6. **Build Motion Detection** (~4 hours)
+   - OpenCV frame differencing to find "active" segments
+   - Reduce frames sent to API by 70-80%
+   - Retest cost: should drop to $2-5/session
+
+**Decision Point:** If successful → buy Phase 1 hardware ($431 for 3 cameras)
+
+**No commitments, no hardware costs, total testing budget: $20-30**
 
 ---
 
