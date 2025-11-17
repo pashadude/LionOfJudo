@@ -51,6 +51,7 @@ Automatically analyzes judo training sessions to provide:
 ┌─────────────────────────────────────────┐
 │   Pi Pico (Master Sync Clock)          │
 │   Sends pulse 30 times/second          │
+│   + Reads IMU sensors (optional)       │
 └────────┬─────────┬──────────┬───────────┘
          │         │          │
     ┌────▼───┐ ┌──▼────┐ ┌───▼────┐
@@ -67,6 +68,12 @@ Automatically analyzes judo training sessions to provide:
 ```
 
 **Key Feature:** Hardware-synced cameras (<10ms accuracy) for frame-perfect multi-angle analysis
+
+**Optional: Add IMU Sensors (+$31)**
+- Attach accelerometers to judogi (chest + hip)
+- Direct power measurement (g-force, not estimated!)
+- Auto-sync via acceleration spikes (throws = 5-8g impacts)
+- See [ACCELEROMETER_SYSTEM.md](ACCELEROMETER_SYSTEM.md)
 
 ### 2. Cloud Processing: AI Recognition Pipeline
 
@@ -162,6 +169,29 @@ python3 create_training_dataset.py
 
 ---
 
+### Optional: Add Accelerometer Sensors (+$31)
+
+**Transform from video analysis to professional sports science!**
+
+```bash
+# Hardware needed:
+# 4× MPU-6050 IMU sensors ($14 total)
+# Pi Pico already handles camera sync - just add I2C connection
+# Velcro + cables ($17)
+```
+
+**What you get:**
+- **Direct power measurement:** 6.2g impact (not estimated from video!)
+- **Auto-sync:** Acceleration spikes perfectly match video frames
+- **Throw signatures:** Each technique has unique g-force profile
+- **Coaching feedback:** "Excellent 7.2g impact, 450°/s hip rotation"
+
+**Total system with accelerometers: $462 (only $31 more than video-only!)**
+
+**See:** [ACCELEROMETER_SYSTEM.md](ACCELEROMETER_SYSTEM.md) for complete guide + Pi Pico code
+
+---
+
 ## Documentation
 
 | Document | Purpose |
@@ -170,6 +200,11 @@ python3 create_training_dataset.py
 | [PHASE_0_TESTING.md](PHASE_0_TESTING.md) | Test AI recognition with $0 hardware investment |
 | [HARDWARE_SETUP.md](HARDWARE_SETUP.md) | Build 3-camera synchronized capture system |
 | [LORA_FINETUNING.md](LORA_FINETUNING.md) | Fine-tune AI for error detection |
+| [YOLO_POSE_GUIDE.md](YOLO_POSE_GUIDE.md) | YOLO11 pose-based recognition (3 approaches) |
+| [ACCELEROMETER_SYSTEM.md](ACCELEROMETER_SYSTEM.md) | IMU sensors for power measurement & auto-sync |
+| `judo_pose_recognition.py` | Pure YOLO11 pose analysis |
+| `judo_hybrid_recognition.py` | YOLO + Vision LLM hybrid (best accuracy) |
+| `pico_unified_controller.py` | Pi Pico code for camera sync + sensors |
 | `create_training_dataset.py` | Auto-generate labeled dataset from YouTube |
 
 ---
