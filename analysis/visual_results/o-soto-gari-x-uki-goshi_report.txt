@@ -1,0 +1,67 @@
+============================================================
+JUDO VISUAL ANALYSIS REPORT
+============================================================
+
+Video: o-soto-gari-x-uki-goshi
+Duration: 43.74s
+Layout: single (1 cameras)
+Poses detected: 4781
+
+============================================================
+MOVEMENT DETECTION
+============================================================
+
+✓ Detected 5 movement(s)
+
+
+1. Movement at 0.00s - 40.67s
+   Duration: 40.67s
+   Camera: 0 | Person: 0
+
+   Biomechanics:
+     • Hip drop: 501.6 pixels
+     • Avg hip height: 711.4px
+     • Avg torso angle: 20.6°
+     • Avg knee angle: 145.2°
+
+2. Movement at 0.00s - 41.21s
+   Duration: 41.21s
+   Camera: 0 | Person: 1
+
+   Biomechanics:
+     • Hip drop: 486.6 pixels
+     • Avg hip height: 704.8px
+     • Avg torso angle: 20.9°
+     • Avg knee angle: 146.2°
+
+3. Movement at 0.00s - 41.24s
+   Duration: 41.24s
+   Camera: 0 | Person: 2
+
+   Biomechanics:
+     • Hip drop: 559.2 pixels
+     • Avg hip height: 697.8px
+     • Avg torso angle: 16.5°
+     • Avg knee angle: 149.2°
+
+4. Movement at 0.00s - 40.41s
+   Duration: 40.41s
+   Camera: 0 | Person: 3
+
+   Biomechanics:
+     • Hip drop: 551.5 pixels
+     • Avg hip height: 666.6px
+     • Avg torso angle: 14.2°
+     • Avg knee angle: 156.9°
+
+5. Movement at 5.07s - 38.61s
+   Duration: 33.53s
+   Camera: 0 | Person: 4
+
+   Biomechanics:
+     • Hip drop: 231.0 pixels
+     • Avg hip height: 835.4px
+     • Avg torso angle: 56.0°
+     • Avg knee angle: 144.8°
+
+============================================================

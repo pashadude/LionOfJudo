@@ -1,0 +1,47 @@
+============================================================
+JUDO VISUAL ANALYSIS REPORT
+============================================================
+
+Video: uki-goshi
+Duration: 2.37s
+Layout: 3h (3 cameras)
+Poses detected: 111
+
+============================================================
+MOVEMENT DETECTION
+============================================================
+
+✓ Detected 3 movement(s)
+
+
+1. Movement at 0.00s - 2.34s
+   Duration: 2.34s
+   Camera: 1 | Person: 0
+
+   Biomechanics:
+     • Hip drop: 215.3 pixels
+     • Avg hip height: 627.6px
+     • Avg torso angle: 83.9°
+     • Avg knee angle: 152.0°
+
+2. Movement at 0.97s - 2.34s
+   Duration: 1.37s
+   Camera: 1 | Person: 1
+
+   Biomechanics:
+     • Hip drop: 202.1 pixels
+     • Avg hip height: 645.9px
+     • Avg torso angle: 53.3°
+     • Avg knee angle: 144.8°
+
+3. Movement at 1.23s - 1.67s
+   Duration: 0.43s
+   Camera: 1 | Person: 2
+
+   Biomechanics:
+     • Hip drop: 178.5 pixels
+     • Avg hip height: 679.9px
+     • Avg torso angle: 109.4°
+     • Avg knee angle: 67.8°
+
+============================================================

@@ -1,0 +1,65 @@
+================================================================================
+DETAILED BODY MOVEMENT ANALYSIS
+================================================================================
+
+Video: uki-goshi
+Duration: 2.37s
+Total poses detected: 111
+
+================================================================================
+BODY PART MOVEMENTS
+================================================================================
+
+🧠 HEAD MOVEMENT:
+   • Head moves vertically (366px range), indicating level change
+   • Horizontal range: 112.0px
+   • Vertical range: 366.3px
+
+💪 TORSO MOVEMENT:
+   • Torso shows significant forward lean with dynamic rotation (145.0° range)
+   • Average angle: 75.9°
+   • Angle range: 8.2° to 153.2°
+
+🤚 ARM MOVEMENTS:
+   • Left arm tightly bent, Right arm tightly bent
+   • Left arm angle range: 0.0° to 169.0°
+   • Right arm angle range: 6.0° to 176.4°
+
+🔵 HIP MOVEMENT:
+   • Large vertical hip drop (217px) - significant level change with substantial lateral shift (148px)
+   • Total hip drop: 217.3px
+   • Horizontal shift: 147.6px
+
+🦵 LEG MOVEMENTS:
+   • Left leg shows deep bend (min 3°). Right leg shows deep bend (min 4°). Stance width varies significantly (245px range)
+   • Average stance width: 118.6px
+
+================================================================================
+TECHNIQUE EXECUTION SUMMARY
+================================================================================
+
+1. Movement Phase 1
+   Time: 0.00s - 2.34s
+   Duration: 2.34s
+   Hip drop: 215.3px
+   Average hip height: 627.6px
+   Average torso angle: 83.9°
+   Average knee angle: 152.0°
+
+2. Movement Phase 2
+   Time: 0.97s - 2.34s
+   Duration: 1.37s
+   Hip drop: 202.1px
+   Average hip height: 645.9px
+   Average torso angle: 53.3°
+   Average knee angle: 144.8°
+
+3. Movement Phase 3
+   Time: 1.23s - 1.67s
+   Duration: 0.43s
+   Hip drop: 178.5px
+   Average hip height: 679.9px
+   Average torso angle: 109.4°
+   Average knee angle: 67.8°
+
+================================================================================

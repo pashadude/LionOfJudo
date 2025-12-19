@@ -1,0 +1,63 @@
+================================================================================
+DETAILED BODY MOVEMENT ANALYSIS
+================================================================================
+
+Video: o-soto-gari
+Duration: 3.57s
+Total poses detected: 339
+
+================================================================================
+BODY PART MOVEMENTS
+================================================================================
+
+🧠 HEAD MOVEMENT:
+   • Head moves vertically (340px range), indicating level change
+   • Horizontal range: 152.8px
+   • Vertical range: 339.9px
+
+💪 TORSO MOVEMENT:
+   • Torso shows significant forward lean with dynamic rotation (177.8° range)
+   • Average angle: 57.6°
+   • Angle range: 0.0° to 177.8°
+
+🤚 ARM MOVEMENTS:
+   • Left arm tightly bent (strong pull-push action), Right arm tightly bent (strong pull-push action)
+   • Left arm angle range: 1.0° to 177.4°
+   • Right arm angle range: 0.0° to 177.4°
+
+✋ HAND/WRIST WORK:
+   • Hands positioned at shoulder/chest level
+   • Strong vertical hand movement (14.8 range)
+   • Moderate lateral hand movement (166.4px range)
+   • Strong pull/push action (max velocity: 195.1px/frame)
+
+🔵 HIP MOVEMENT:
+   • Large vertical hip drop (215px) - significant level change with substantial lateral shift (193px)
+   • Total hip drop: 215.4px
+   • Horizontal shift: 193.0px
+
+🦵 LEG MOVEMENTS:
+   • Left leg shows deep bend (min 46°). Right leg shows deep bend (min 15°). Stance width varies significantly (243px range)
+   • Average stance width: 55.4px
+
+================================================================================
+TECHNIQUE EXECUTION SUMMARY
+================================================================================
+
+1. Movement Phase 1
+   Time: 0.00s - 3.55s
+   Duration: 3.55s
+   Hip drop: 43.3px
+   Average hip height: 534.9px
+   Average torso angle: 33.4°
+   Average knee angle: 159.2°
+
+2. Movement Phase 2
+   Time: 0.00s - 3.55s
+   Duration: 3.55s
+   Hip drop: 215.4px
+   Average hip height: 598.1px
+   Average torso angle: 100.4°
+   Average knee angle: 158.0°
+
+================================================================================

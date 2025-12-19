@@ -1,0 +1,37 @@
+============================================================
+JUDO VISUAL ANALYSIS REPORT
+============================================================
+
+Video: Ippon-seoi-Nagi
+Duration: 3.47s
+Layout: 3h (3 cameras)
+Poses detected: 158
+
+============================================================
+MOVEMENT DETECTION
+============================================================
+
+✓ Detected 2 movement(s)
+
+
+1. Movement at 0.00s - 3.44s
+   Duration: 3.44s
+   Camera: 1 | Person: 0
+
+   Biomechanics:
+     • Hip drop: 241.6 pixels
+     • Avg hip height: 559.0px
+     • Avg torso angle: 38.9°
+     • Avg knee angle: 149.1°
+
+2. Movement at 0.00s - 3.44s
+   Duration: 3.44s
+   Camera: 1 | Person: 1
+
+   Biomechanics:
+     • Hip drop: 244.3 pixels
+     • Avg hip height: 625.3px
+     • Avg torso angle: 29.9°
+     • Avg knee angle: 133.2°
+
+============================================================

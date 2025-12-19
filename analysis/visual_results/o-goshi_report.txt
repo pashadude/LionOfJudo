@@ -1,0 +1,37 @@
+============================================================
+JUDO VISUAL ANALYSIS REPORT
+============================================================
+
+Video: o-goshi
+Duration: 1.55s
+Layout: 3h (3 cameras)
+Poses detected: 166
+
+============================================================
+MOVEMENT DETECTION
+============================================================
+
+✓ Detected 2 movement(s)
+
+
+1. Movement at 0.00s - 1.53s
+   Duration: 1.53s
+   Camera: 1 | Person: 0
+
+   Biomechanics:
+     • Hip drop: 155.0 pixels
+     • Avg hip height: 570.5px
+     • Avg torso angle: 75.9°
+     • Avg knee angle: 163.6°
+
+2. Movement at 0.00s - 1.53s
+   Duration: 1.53s
+   Camera: 1 | Person: 1
+
+   Biomechanics:
+     • Hip drop: 190.3 pixels
+     • Avg hip height: 685.7px
+     • Avg torso angle: 85.7°
+     • Avg knee angle: 162.9°
+
+============================================================

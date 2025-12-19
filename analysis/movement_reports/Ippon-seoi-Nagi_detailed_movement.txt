@@ -1,0 +1,57 @@
+================================================================================
+DETAILED BODY MOVEMENT ANALYSIS
+================================================================================
+
+Video: Ippon-seoi-Nagi
+Duration: 3.47s
+Total poses detected: 158
+
+================================================================================
+BODY PART MOVEMENTS
+================================================================================
+
+🧠 HEAD MOVEMENT:
+   • Head moves vertically (384px range), indicating level change
+   • Horizontal range: 177.2px
+   • Vertical range: 383.5px
+
+💪 TORSO MOVEMENT:
+   • Torso shows significant forward lean with dynamic rotation (171.0° range)
+   • Average angle: 35.9°
+   • Angle range: 3.0° to 174.0°
+
+🤚 ARM MOVEMENTS:
+   • Left arm tightly bent, Right arm tightly bent
+   • Left arm angle range: 0.2° to 177.9°
+   • Right arm angle range: 4.4° to 148.4°
+
+🔵 HIP MOVEMENT:
+   • Large vertical hip drop (264px) - significant level change with substantial lateral shift (216px)
+   • Total hip drop: 263.6px
+   • Horizontal shift: 215.6px
+
+🦵 LEG MOVEMENTS:
+   • Left leg shows deep bend (min 60°). Right leg shows deep bend (min 34°). Stance width varies significantly (229px range)
+   • Average stance width: 92.3px
+
+================================================================================
+TECHNIQUE EXECUTION SUMMARY
+================================================================================
+
+1. Movement Phase 1
+   Time: 0.00s - 3.44s
+   Duration: 3.44s
+   Hip drop: 241.6px
+   Average hip height: 559.0px
+   Average torso angle: 38.9°
+   Average knee angle: 149.1°
+
+2. Movement Phase 2
+   Time: 0.00s - 3.44s
+   Duration: 3.44s
+   Hip drop: 244.3px
+   Average hip height: 625.3px
+   Average torso angle: 29.9°
+   Average knee angle: 133.2°
+
+================================================================================

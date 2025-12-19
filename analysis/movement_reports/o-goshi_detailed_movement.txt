@@ -1,0 +1,57 @@
+================================================================================
+DETAILED BODY MOVEMENT ANALYSIS
+================================================================================
+
+Video: o-goshi
+Duration: 1.55s
+Total poses detected: 166
+
+================================================================================
+BODY PART MOVEMENTS
+================================================================================
+
+🧠 HEAD MOVEMENT:
+   • Head moves vertically (379px range), indicating level change
+   • Horizontal range: 181.6px
+   • Vertical range: 379.3px
+
+💪 TORSO MOVEMENT:
+   • Torso shows significant forward lean with dynamic rotation (170.8° range)
+   • Average angle: 79.9°
+   • Angle range: 0.3° to 171.1°
+
+🤚 ARM MOVEMENTS:
+   • Left arm tightly bent, Right arm tightly bent
+   • Left arm angle range: 0.2° to 171.9°
+   • Right arm angle range: 0.1° to 150.3°
+
+🔵 HIP MOVEMENT:
+   • Large vertical hip drop (258px) - significant level change with substantial lateral shift (285px)
+   • Total hip drop: 257.7px
+   • Horizontal shift: 285.5px
+
+🦵 LEG MOVEMENTS:
+   • Left leg shows deep bend (min 11°). Right leg shows deep bend (min 14°). Stance width varies significantly (311px range)
+   • Average stance width: 71.5px
+
+================================================================================
+TECHNIQUE EXECUTION SUMMARY
+================================================================================
+
+1. Movement Phase 1
+   Time: 0.00s - 1.53s
+   Duration: 1.53s
+   Hip drop: 155.0px
+   Average hip height: 570.5px
+   Average torso angle: 75.9°
+   Average knee angle: 163.6°
+
+2. Movement Phase 2
+   Time: 0.00s - 1.53s
+   Duration: 1.53s
+   Hip drop: 190.3px
+   Average hip height: 685.7px
+   Average torso angle: 85.7°
+   Average knee angle: 162.9°
+
+================================================================================

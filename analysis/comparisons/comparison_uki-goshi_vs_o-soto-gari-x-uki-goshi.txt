@@ -1,0 +1,43 @@
+======================================================================
+JUDO TECHNIQUE COMPARISON REPORT
+======================================================================
+
+Video 1: uki-goshi (Training)
+Video 2: o-soto-gari-x-uki-goshi (Performance)
+
+======================================================================
+BIOMECHANICAL COMPARISON
+======================================================================
+
+📊 Hip Height:
+   Training:    627.6px
+   Performance: 711.4px
+   Difference:  +83.8px (+13.3%)
+   ⚠️  Performance has higher hip (lower in frame)
+
+📐 Torso Angle:
+   Training:    83.9°
+   Performance: 20.6°
+   Difference:  -63.3° (-75.5%)
+   ✅ More upright in performance
+
+🦵 Knee Angle:
+   Training:    152.0°
+   Performance: 145.2°
+   Difference:  -6.8° (-4.5%)
+   ⚠️  Deeper knee bend in performance
+
+📉 Hip Drop (Movement Amplitude):
+   Training:    215.3px
+   Performance: 501.6px
+   Difference:  +286.3px (+133.0%)
+   ✅ Larger movement in performance (more dynamic)
+
+======================================================================
+OVERALL ASSESSMENT
+======================================================================
+
+Technique Consistency: 59.7%
+❌ Low - Significant differences, review technique
+
+======================================================================

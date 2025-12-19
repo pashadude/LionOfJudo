@@ -1,0 +1,14 @@
+============================================================
+JUDO VISUAL ANALYSIS REPORT
+============================================================
+
+Video: o-soto-gari-train
+Duration: 3.05s
+Layout: 3h (3 cameras)
+Poses detected: 183
+
+============================================================
+MOVEMENT DETECTION
+============================================================
+
+⚠️  No significant movements detected

@@ -1,0 +1,37 @@
+============================================================
+JUDO VISUAL ANALYSIS REPORT
+============================================================
+
+Video: o-soto-gari
+Duration: 3.57s
+Layout: 3h (3 cameras)
+Poses detected: 339
+
+============================================================
+MOVEMENT DETECTION
+============================================================
+
+✓ Detected 2 movement(s)
+
+
+1. Movement at 0.00s - 3.55s
+   Duration: 3.55s
+   Camera: 1 | Person: 0
+
+   Biomechanics:
+     • Hip drop: 43.3 pixels
+     • Avg hip height: 534.9px
+     • Avg torso angle: 33.4°
+     • Avg knee angle: 159.2°
+
+2. Movement at 0.00s - 3.55s
+   Duration: 3.55s
+   Camera: 1 | Person: 1
+
+   Biomechanics:
+     • Hip drop: 215.4 pixels
+     • Avg hip height: 598.1px
+     • Avg torso angle: 100.4°
+     • Avg knee angle: 158.0°
+
+============================================================

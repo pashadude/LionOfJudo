@@ -1,0 +1,88 @@
+================================================================================
+COMPREHENSIVE WRESTLING/JUDO ANALYSIS - MASTER REPORT
+================================================================================
+
+Generated: 2025-12-19 22:42:08
+
+================================================================================
+TRAINING VIDEOS (Rubber Band Practice)
+================================================================================
+
+📹 UKI-GOSHI
+   File: examples/uki-goshi.mov
+   Duration: 2.37s
+   Poses detected: 111
+   Movements detected: 3
+   Movement 1: 2.34s, Hip drop: 215.3px
+   Movement 2: 1.37s, Hip drop: 202.1px
+   Movement 3: 0.43s, Hip drop: 178.5px
+
+📹 O-SOTO-GARI
+   File: examples/o-soto-gari.mov
+   Duration: 3.57s
+   Poses detected: 339
+   Movements detected: 2
+   Movement 1: 3.55s, Hip drop: 43.3px
+   Movement 2: 3.55s, Hip drop: 215.4px
+
+📹 O-GOSHI
+   File: examples/o-goshi.mov
+   Duration: 1.55s
+   Poses detected: 166
+   Movements detected: 2
+   Movement 1: 1.53s, Hip drop: 155.0px
+   Movement 2: 1.53s, Hip drop: 190.3px
+
+📹 IPPON-SEOI-NAGI
+   File: examples/Ippon-seoi-Nagi.mov
+   Duration: 3.47s
+   Poses detected: 158
+   Movements detected: 2
+   Movement 1: 3.44s, Hip drop: 241.6px
+   Movement 2: 3.44s, Hip drop: 244.3px
+
+================================================================================
+PUPIL PERFORMANCE VIDEOS
+================================================================================
+
+📹 O-SOTO-GARI-X-UKI-GOSHI
+   File: data/Lav/o-soto-gari-x-uki-goshi.mov
+   Duration: 43.74s
+   Layout: single (1 cameras)
+   Poses detected: 4781
+   Movements detected: 5
+
+   Movement Summary:
+   1. Time: 0.0s-40.7s, Hip drop: 501.6px, Person: 0, Camera: 0
+   2. Time: 0.0s-41.2s, Hip drop: 486.6px, Person: 1, Camera: 0
+   3. Time: 0.0s-41.2s, Hip drop: 559.2px, Person: 2, Camera: 0
+   4. Time: 0.0s-40.4s, Hip drop: 551.5px, Person: 3, Camera: 0
+   5. Time: 5.1s-38.6s, Hip drop: 231.0px, Person: 4, Camera: 0
+
+================================================================================
+GENERATED OUTPUTS
+================================================================================
+
+✓ Annotated videos: 16
+   - o-soto-gari-train_cam1_annotated.mp4 (3.8MB)
+   - o-goshi_cam1_annotated.mp4 (2.3MB)
+   - o-goshi_cam2_annotated.mp4 (0.1MB)
+   - o-soto-gari-train_cam2_annotated.mp4 (0.3MB)
+   - o-soto-gari-x-uki-goshi_cam0_annotated.mp4 (88.7MB)
+   - o-soto-gari_cam1_annotated.mp4 (3.6MB)
+   - Ippon-seoi-Nagi_cam1_annotated.mp4 (2.6MB)
+   - uki-goshi_cam0_annotated.mp4 (0.1MB)
+   - Ippon-seoi-Nagi_cam2_annotated.mp4 (0.2MB)
+   - o-soto-gari_cam2_annotated.mp4 (0.3MB)
+
+✓ Comparison videos: 4
+   - comparison_o-soto-gari-train_vs_o-soto-gari.mp4 (7.7MB)
+   - comparison_o-soto-gari_vs_o-soto-gari-x-uki-goshi.mp4 (17.7MB)
+   - comparison_uki-goshi_vs_o-soto-gari-x-uki-goshi.mp4 (6.4MB)
+   - comparison_uki-goshi_vs_pupil_FULL.mp4 (35.9MB)
+
+✓ Detailed movement reports: 5
+
+================================================================================
+ANALYSIS COMPLETE
+================================================================================
