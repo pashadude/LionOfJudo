@@ -1,319 +1,271 @@
 # 🥋 LionOfJudo: AI-Powered Judo Training Analysis
 
-**Mission:** Bring professional sports science analysis to underfunded judo schools in Serbia (and beyond) using affordable hardware and AI.
+**Mission:** Bring professional sports-science analysis to underfunded judo schools using affordable hardware and AI.
 
-**Status:** Planning Phase → Ready for Phase 0 Testing
-
----
-
-## What This System Does
-
-Automatically analyzes judo training sessions to provide:
-
-1. **Technique Recognition** - Identifies all 120 standard judo techniques (80 standing, 40 ground)
-2. **Quality Scoring** - Rates execution quality with specific improvement suggestions
-3. **Error Detection** - Spots common mistakes (hip height, timing, foot placement, etc.)
-4. **Progress Tracking** - Shows athlete improvement over time
-5. **Video Evidence** - Clips with synchronized multi-angle playback
-
-**Delivered 4-5 hours after training session via web dashboard**
+**Status:** ✅ **Working prototype** — software pipeline verified end-to-end; wearable sensor firmware compiled and ready to flash (hardware bench test pending parts delivery).
 
 ---
 
-## Cost Breakdown
+## What the System Does
 
-### One-Time Hardware (Start Small!)
+Record a normal training session with two ordinary cameras while the athlete wears two matchbox-sized motion sensors inside the judogi. Afterwards, one command on a laptop produces:
 
-| Phase | Hardware | Cost |
-|-------|----------|------|
-| **Phase 0: Testing** | Use YouTube videos only | **$0** |
-| **Phase 1: MVP (1 school)** | 3-camera sync system | **$431** |
-| **Phase 3: Scale (5 schools)** | 5× 3-camera kits | **$2,155** |
+1. **Automatic throw detection** — every throw found from the sensors' g-force spikes (no manual scrubbing through an hour of footage)
+2. **Per-throw video clips** from both camera angles, perfectly synchronized
+3. **Skeleton overlay** — 17-keypoint pose tracking drawn on every clip with biomechanical measurements (hip height, torso angle, knee angle)
+4. **Technique classification** — rule-based recognition (o-soto-gari, o-goshi, ippon-seoi-nagi, uki-goshi, ...) with confidence and reasoning
+5. **Direct power measurement** — peak g-force, rotation speed (°/s), throw duration, and a power index from the chest and hip sensors (measured, not estimated from video)
+6. **Privacy protection** — every face in frame is blurred except the designated athlete's; failure mode always errs toward blurring more, never exposing anyone
 
-### Monthly Operating Costs
-
-| Service | Cost (per school) |
-|---------|-------------------|
-| Hetzner Storage (1TB) | ~$4/month |
-| OpenRouter API | ~$5-10/month |
-| Shared Hetzner server | ~$9/month |
-| **Total** | **~$21/month** |
-
-**Per Session:** $5-10 using base Gemini Flash, or $30 with fine-tuned model
+Everything runs **offline** on a MacBook (Apple Silicon / MPS). No cloud, no subscriptions, no per-session cost.
 
 ---
 
-## How It Works
-
-### 1. Hardware: 3-Camera Synchronized Capture
+## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│   Pi Pico (Master Sync Clock)          │
-│   Sends pulse 30 times/second          │
-│   + Reads IMU sensors (optional)       │
-└────────┬─────────┬──────────┬───────────┘
-         │         │          │
-    ┌────▼───┐ ┌──▼────┐ ┌───▼────┐
-    │ Pi #1  │ │ Pi #2 │ │ Pi #3  │
-    │ Cam 1  │ │ Cam 2 │ │ Cam 3  │
-    │(Front) │ │(Side) │ │(Back)  │
-    └────────┘ └───────┘ └────────┘
-         │         │          │
-         └─────────┴──────────┘
-                   │
-          Ethernet Switch
-                   │
-         Upload to Hetzner Storage
+AT THE DOJO (zero infrastructure)          AT HOME (MacBook M2)
+─────────────────────────────────          ───────────────────────────────
+Sony FDR-X3000 on tripod   ─┐              1. Copy both video files
+iPhone on tripod           ─┼─ just record 2. Plug sensors into USB power →
+2 IMU units in the judogi  ─┘                 they auto-join home WiFi →
+                                              python tools/fetch_imu.py
+Sync ritual:                               3. python -m pipeline.run_session
+  3 sharp jumps at session start           4. One keypress per throw to mark
+  3 claps at session end                      your athlete, then walk away
+                                           5. Read sessions/<date>/session_report.md
 ```
 
-**Key Feature:** Hardware-synced cameras (<10ms accuracy) for frame-perfect multi-angle analysis
+**Three clocks, one timeline.** The two cameras are aligned by cross-correlating their audio tracks (the master timeline is the Sony's). The sensors' internal clocks are aligned to the same timeline via the jump ritual: the three g-spikes in the sensor log are matched against the three corresponding audio transients by their spacing fingerprint. The optional end-of-session claps give a second anchor point, which absorbs the ESP32 crystal drift (±20 ppm ≈ ±0.1 s over 90 min) with a two-point linear fit. Verified residuals: **under 4 ms**.
 
-**Optional: Add IMU Sensors (+$31)**
-- Attach accelerometers to judogi (chest + hip)
-- Direct power measurement (g-force, not estimated!)
-- Auto-sync via acceleration spikes (throws = 5-8g impacts)
-- See [ACCELEROMETER_SYSTEM.md](ACCELEROMETER_SYSTEM.md)
+**Why sensors instead of video motion detection?** A g-spike on the athlete's body is a far more reliable throw signal than pixel-space hip tracking when six kids share the mat. It also measures what video can only guess: actual impact force and hip rotation speed.
 
-### 2. Cloud Processing: AI Recognition Pipeline
-
-```
-Videos uploaded → Hetzner server
-    ↓
-Extract frames (1/sec) → ~7,200 frames
-    ↓
-Motion detection → Filter to ~2,000 action frames
-    ↓
-Stitch 3 views into grid → Reduce API cost by 67%
-    ↓
-OpenRouter Vision API → Technique recognition + quality scoring
-    ↓
-Generate dashboard → Video clips + athlete progress charts
-```
-
-**Models Used:**
-- **Base:** Gemini Flash 1.5 ($0.00002/image) - General technique recognition
-- **Fine-tuned:** Custom GPT-4V ($0.006/image) - Detects subtle errors specific to your coaching
-
-### 3. Output: Coaching Dashboard
-
-**For Each Session:**
-- List of all techniques attempted with timestamps
-- Quality scores (1-10) with specific improvement notes
-- Click any technique → see synchronized 3-camera playback
-- Per-athlete progress tracking
-- Exportable PDF reports for parents
+**Why flash logging instead of live streaming?** A 2.4 GHz radio strapped to a child being thrown onto a mat drops packets constantly. The units log to their own flash (2+ hours at 200 Hz on 16 MB) and upload over WiFi at home. Radio-off logging also triples battery life. Nothing at the dojo needs setting up, powering, or debugging.
 
 ---
 
-## Quick Start
+## Hardware
 
-### Phase 0: Test the Concept (This Week!)
+### Cameras
+Any two cameras with audio work. This build uses a **Sony FDR-X3000** (4K action cam) and an **iPhone**. No sync cables, no genlock — audio cross-correlation replaces all of it.
 
-**Goal:** Validate AI can recognize judo techniques BEFORE buying hardware
+### Wearable IMU units (2× — chest + hip)
 
-**Investment:** $0 hardware, $20 API testing
+| Part | Spec | Why |
+|---|---|---|
+| ESP32-S3 SuperMini | **16 MB flash (N16R8)** — verify before ordering! | Samples the IMU at 200 Hz, logs to flash, serves WiFi download. 4 MB variants only hold ~35 min. |
+| MPU-6050 (GY-521) | ±16 g accel, ±2000 °/s gyro | The actual sensor. Judo impacts peak well under 16 g. |
+| Protected LiPo 502030, 250 mAh | built-in protection circuit (PCM) | ~40 mA draw → 5–6 h per charge. **Do not use unprotected cells on a child.** |
+| TP4056 USB-C board | 1 A charger | Plug USB-C at home: charges + enables WiFi download simultaneously. |
+| Mini slide switch, JST-PH pair, 30 AWG silicone wire | | On/off + detachable battery. |
+| Rigid pill capsule ~50×25 mm + 2 mm silicone sheet | | Rigid shell stops puncture; silicone spreads impact. The board must not rattle inside (loose mounting smears the g readings). |
+
+**Total: ≈ $41 including spares** (Temu prices). Safer-chemistry option: 10440 LiFePO4 (AAA-size, no thermal runaway when crushed) + holder + LiFePO4 charger, ~$6 more and slightly bulkier.
+
+**Wiring:** MPU-6050 → ESP32: `VCC→3V3, GND→GND, SDA→GPIO8, SCL→GPIO9`. Battery + → 100k/100k divider → GPIO4 (low-battery cutoff closes the log file cleanly before brownout).
+
+**Placement on the judogi:**
+- **Chest unit:** centered on the sternum, under the crossed lapels (ukemi lands on the back/side; the lapels add padding)
+- **Hip unit:** front of the belt, tucked behind the knot
+- **Never on the spine or lower back** — direct mat impact zone
+- Sewn silicone-lined pockets with velcro flaps, ~70×50 mm
+- **Inspect cells for puffing or dents before every session; retire on any damage**
+
+### Compute
+Any Apple Silicon Mac (uses MPS). A full session processes overnight. No GPU server needed.
+
+---
+
+## Firmware (`firmware/lionimu/`)
+
+Single Arduino sketch, no external cloud, no app. Zero buttons — the boot mode is chosen by location:
+
+1. **Power on** → scan for the home WiFi SSID for 8 s
+2. **Found (you're at home):** joins WiFi, announces itself as `lion-chest.local` / `lion-hip.local`, serves HTTP endpoints `/list`, `/download?f=`, `/delete?f=` (POST), `/status` (battery voltage, free flash). *Slow green blink.*
+3. **Not found (you're at the dojo):** 10 s amber countdown, then logs at 200 Hz until power-off or low battery. *Blue flash on impacts (visible liveness check), dim green heartbeat otherwise.*
+
+**LED codes:** green blink = download mode · amber countdown = about to log · blue flash = impact recorded · purple blink = MPU-6050 not responding (check wiring) · red = flash/battery fault (log was closed cleanly).
+
+**Binary log format `LJIM` v1** (must stay in sync with `pipeline/imu_ingest.py`):
+
+```
+Header (32 B): 'LJIM' | u8 version=1 | u8 unit_id (0=chest,1=hip) | u16 rate_hz
+               | f32 accel_scale (LSB/g) | f32 gyro_scale (LSB/°/s) | 16 B reserved
+Record (16 B): u32 millis | i16 ax,ay,az | i16 gx,gy,gz     (little-endian)
+→ 3.2 KB/s = 11.5 MB per hour at 200 Hz
+```
+
+**Build & flash** (per unit — set `UNIT_ID`/`UNIT_NAME` and WiFi credentials in `config.h` first):
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/pashadude/LionOfJudo.git
-cd LionOfJudo
-
-# 2. Install dependencies
-pip install yt-dlp opencv-python openai
-
-# 3. Run Phase 0 testing (see PHASE_0_TESTING.md)
-# Download YouTube videos → Test OpenRouter API → Measure accuracy & cost
-
-# 4. Decision: If >70% accuracy → Proceed to Phase 1
+arduino-cli compile --fqbn esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB firmware/lionimu
+arduino-cli upload -p /dev/cu.usbmodem* --fqbn esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB firmware/lionimu
 ```
 
-**See:** [PHASE_0_TESTING.md](PHASE_0_TESTING.md) for detailed guide
+(The 9.9 MB data partition of that scheme is labeled `ffat`; the sketch mounts it as LittleFS explicitly.)
 
 ---
 
-### Phase 1: Build 3-Camera System (If Phase 0 Succeeds)
+## Software Pipeline (`pipeline/`)
 
-**Investment:** $431 hardware, ~$21/month operating
+| Module | What it does |
+|---|---|
+| `audio_sync.py` | Decodes both cameras' audio via ffmpeg, builds onset envelopes (robust to different mics/AGC), cross-correlates → sub-frame offset + confidence ratio. Also extracts clap/transient candidates for IMU alignment. |
+| `imu_ingest.py` | Parses `LJIM` logs into numpy; spike detection with per-event peak dedup; 3-spike ritual detector; spacing-fingerprint matching of ritual↔audio transients; least-squares clock fit (`t_master = a·t_imu + b`); `measure_throw_power` → peak g, duration, max rotation, power index. |
+| `throw_segmenter.py` | Merges chest+hip spikes (mapped to master time) into throw events, drops the ritual events, emits clip windows `[peak−4 s, peak+3 s]`, merges overlaps. A hip-only or chest-only spike still counts — a throw missed by one sensor isn't lost. |
+| `face_blur.py` | Two blur layers: (1) YOLO11-pose head keypoints → Gaussian ellipse over every head; (2) YuNet face detector as safety net for anyone pose missed (spectators, partial bodies). Athlete exemption via ByteTrack: one keypress on the clip's first frame; if his track is lost mid-clip his face gets blurred too for those frames (recorded in the report) — the failure mode is always over-blur, never expose. |
+| `clip_extractor.py` | Frame-accurate ffmpeg re-encode cuts (stream-copy would snap to the Sony's sparse long-GOP keyframes). Optional downscale to 1080p for faster inference on 4K sources. |
+| `run_session.py` | The orchestrator. Reuses the existing analyzers unchanged: `VisualJudoAnalyzer` (skeleton overlay + pose JSON), `classify_technique` (rule-based recognition), `MovementAnalyzer` (movement phases). Writes `session_report.md` + `.json`. |
 
-**See:** [HARDWARE_SETUP.md](HARDWARE_SETUP.md) for step-by-step build instructions
+**Tools:**
+- `tools/fetch_imu.py` — pulls logs from both units over WiFi, size-verifies, optional `--wipe`
+- `tools/imu_plot.py` — g-force/rotation plot with detected spikes and ritual marked; the threshold-tuning instrument
+- `tools/make_synthetic_log.py` — generates fake sensor logs so the whole pipeline can be tested with zero hardware
 
-**What You Get:**
-- 3 Raspberry Pi 4 + Arducam cameras
-- Pi Pico sync generator
-- Capture scripts
-- Upload scripts to Hetzner
-- Basic HTML report with technique list
+**Dependencies:** the existing venv (ultralytics, opencv, scipy, numpy, torch) plus `lap` (ByteTrack) and the ffmpeg CLI. The YuNet model (230 KB) is committed in `models/`.
 
 ---
 
-### Optional: Fine-Tune for Error Detection
+## Usage
 
-**If base model can't spot subtle errors (hip height, timing, etc.):**
-
+### One-time setup
 ```bash
-# BREAKTHROUGH: Automatic labeled dataset creation!
-python3 create_training_dataset.py
-
-# This script:
-# 1. Downloads YouTube videos with 120 techniques
-# 2. Uses OCR to read technique names from video text
-# 3. Extracts ~1200 labeled images in 10 minutes
-# 4. Creates training file for OpenAI fine-tuning
+uv pip install lap                  # tracking dependency
+brew install ffmpeg arduino-cli     # if not present
+# flash both units (see Firmware above), sew the pockets
 ```
 
-**Cost:** $30-50 one-time training
-**Result:** Model that knows YOUR students' common mistakes
-
-**See:** [LORA_FINETUNING.md](LORA_FINETUNING.md) for complete guide
-
----
-
-### Optional: Add Accelerometer Sensors (+$31)
-
-**Transform from video analysis to professional sports science!**
-
+### Every session
 ```bash
-# Hardware needed:
-# 4× MPU-6050 IMU sensors ($14 total)
-# Pi Pico already handles camera sync - just add I2C connection
-# Velcro + cables ($17)
+# 1. At the dojo: sensors on, cameras on, 3 jumps, train, 3 claps.
+
+# 2. At home: plug sensors into USB, then
+python tools/fetch_imu.py --out sessions/$(date +%F)/imu/ --wipe
+
+# 3. Run the pipeline (overnight for long sessions)
+python -m pipeline.run_session \
+    --sony  /path/to/C0012.MP4 \
+    --iphone /path/to/IMG_4411.MOV \
+    --imu   sessions/2026-07-05/imu/ \
+    --out   sessions/2026-07-05/
+
+# 4. The only interactive step comes early: one window per throw,
+#    press the number over your athlete (0 = not in this clip).
+#    Then it runs unattended.
+
+# 5. Morning: open sessions/2026-07-05/session_report.md
 ```
 
-**What you get:**
-- **Direct power measurement:** 6.2g impact (not estimated from video!)
-- **Auto-sync:** Acceleration spikes perfectly match video frames
-- **Throw signatures:** Each technique has unique g-force profile
-- **Coaching feedback:** "Excellent 7.2g impact, 450°/s hip rotation"
+### Output layout
+```
+sessions/2026-07-05/
+├── imu/                      chest_001.bin, hip_001.bin
+├── throws/throw_01/
+│   ├── sony_raw.mp4              exact cut, unprocessed
+│   ├── sony_blurred.mp4          all faces blurred except your athlete
+│   ├── sony_blurred_cam0_annotated.mp4   + skeleton & measurements
+│   ├── sony_blurred_analysis.json        per-frame 17-keypoint poses
+│   ├── iphone_*                  same set for the second angle
+│   └── ...
+├── session_report.json
+└── session_report.md         per throw: technique + confidence + reasoning,
+                              peak g / rotation / duration / power index
+                              per sensor, links to clips, blur coverage notes
+```
 
-**Total system with accelerometers: $462 (only $31 more than video-only!)**
-
-**See:** [ACCELEROMETER_SYSTEM.md](ACCELEROMETER_SYSTEM.md) for complete guide + Pi Pico code
-
----
-
-## Documentation
-
-| Document | Purpose |
-|----------|---------|
-| [PROJECT_PLAN.md](PROJECT_PLAN.md) | Complete system architecture & cost analysis |
-| [PHASE_0_TESTING.md](PHASE_0_TESTING.md) | Test AI recognition with $0 hardware investment |
-| [HARDWARE_SETUP.md](HARDWARE_SETUP.md) | Build 3-camera synchronized capture system |
-| [LORA_FINETUNING.md](LORA_FINETUNING.md) | Fine-tune AI for error detection |
-| [YOLO_POSE_GUIDE.md](YOLO_POSE_GUIDE.md) | YOLO11 pose-based recognition (3 approaches) |
-| [ACCELEROMETER_SYSTEM.md](ACCELEROMETER_SYSTEM.md) | IMU sensors for power measurement & auto-sync |
-| `judo_pose_recognition.py` | Pure YOLO11 pose analysis |
-| `judo_hybrid_recognition.py` | YOLO + Vision LLM hybrid (best accuracy) |
-| `pico_unified_controller.py` | Pi Pico code for camera sync + sensors |
-| `create_training_dataset.py` | Auto-generate labeled dataset from YouTube |
-
----
-
-## Technology Stack
-
-**Hardware:**
-- Raspberry Pi 4 (4GB) - Video capture & upload
-- Arducam Global Shutter - Motion-blur-free cameras
-- Raspberry Pi Pico - Hardware sync generator
-
-**Storage:**
-- Hetzner Storage Box (1TB) - €3.81/month
-- Hetzner Dedicated Server - ~€40/month shared
-
-**AI/ML:**
-- OpenRouter API - Vision model access
-- Gemini Flash 1.5 - Base recognition ($0.00002/image)
-- GPT-4V Fine-tuned - Error detection ($0.006/image)
-
-**Software:**
-- Python + OpenCV - Video processing
-- FFmpeg - Frame extraction
-- Tesseract - OCR for auto-labeling
-- React - Dashboard frontend
-- FastAPI - Backend API
+### Tuning knobs
+| Flag | Default | When to change |
+|---|---|---|
+| `--threshold-g` | 3.0 | Throw detection threshold. Tuned for adults; a light 8-year-old's throws may peak at 2–4 g — try 2.0–2.5. Re-running segmentation is cheap (no re-inference). Inspect first with `tools/imu_plot.py <log> --threshold-g 2.5`. |
+| `--blur-all` | off | Skip the picker; blur everyone including your athlete. Fastest, safest to share. |
+| `--no-blur` | off | Skip blurring entirely. **Private review only — never share this output.** |
+| `--scale-height` | 1080 | `0` keeps full 4K (slower inference). |
+| `--device` | mps | `cpu` on non-Apple hardware. |
 
 ---
 
-## Why This Approach?
+## Verification Status
 
-### Compared to Traditional Systems
+Every module was verified before commit:
 
-**Traditional sports analysis systems:**
-- Cost: $10,000-50,000 per installation
-- Custom ML models require months of training
-- GPU infrastructure: $500+/month
-- Limited to wealthy clubs and national teams
+| Test | Result |
+|---|---|
+| Audio sync on a synthetically shifted copy of real footage | Recovered 3.700 s offset **exactly**, both directions, confidence 5.2 |
+| IMU parse + ritual detection + clock fit on synthetic logs with simulated drift | Drift and offset recovered, residuals **< 4 ms** |
+| Segmentation on two-unit logs incl. a hip-only spike and rituals | All 4 throws found, rituals excluded, units merged |
+| Face blur on real multi-person footage | All faces blurred; selected track clear 247/247 frames; duplicate appearances of the same person on other tracks stayed blurred (fail-safe confirmed) |
+| Clip extraction | 7.000 s requested → 7.000 s delivered |
+| Full end-to-end dry run (2 cameras + 2 sensor logs → report) | 2/2 throws detected, clips cut, blurred, annotated, classified, report written |
+| Firmware | Compiles for ESP32-S3 16 MB: 32% flash, 16% RAM |
 
-**LionOfJudo:**
-- Cost: $431 hardware + $21/month
-- Use existing vision LLMs (no training needed)
-- Optional fine-tuning: $40 one-time
-- Accessible to underfunded schools
+Remaining (hardware-gated): bench test of a real unit, mattress-throw test, dress rehearsal at a real training. Checklist in [PROTOTYPE.md](PROTOTYPE.md).
 
-### Key Innovations
+---
 
-1. **Hardware Sync on Budget:** Pi Pico triggers cameras simultaneously (<$20)
-2. **OCR for Auto-Labeling:** Extract labels from YouTube videos (10 min vs weeks)
-3. **Vision LLMs:** No custom ML training needed
-4. **Hetzner Hosting:** 90% cheaper than AWS
-5. **Start Small:** 3 cameras (not 6) for half the cost
+## Privacy
+
+This system records children. The rules are built into the code, not the workflow:
+
+- Every detected face is blurred **by default**; only one explicitly confirmed, continuously tracked athlete is exempted
+- Two independent detection layers (pose heads + YuNet faces) so people the pose model misses still get blurred
+- Track loss blurs the exempted athlete rather than risking anyone else
+- Blur coverage gaps are listed in the report for review before sharing anything
+- No cloud upload of any footage; everything stays on the local machine
+
+---
+
+## Repository Layout
+
+```
+pipeline/           the post-training processing pipeline (see table above)
+firmware/lionimu/   ESP32-S3 wearable logger (Arduino)
+tools/              fetch_imu.py · imu_plot.py · make_synthetic_log.py
+models/             YuNet face detection ONNX (230 KB)
+PROTOTYPE.md        build guide: wiring, flashing, session workflow, bench checklist
+examples/, data/    test footage
+analysis/           outputs of the earlier single-video analysis scripts
+
+# Earlier-generation scripts (still used by the pipeline or standalone):
+phase0_visual_analysis.py    VisualJudoAnalyzer — skeleton overlay (reused by run_session)
+phase0_judo_analysis.py      rule-based technique classifier (reused by run_session)
+movement_analysis.py         movement phase extraction (reused by run_session)
+judo_hybrid_recognition.py   optional YOLO + Vision-LLM hybrid (off by default, $)
+compare_techniques.py        training vs performance comparison
+batch_process.py             multi-video batch runner
+```
+
+### Legacy design documents
+The original plan targeted a fixed 3× Raspberry Pi camera rig ($431+). Those documents remain for reference — [PROJECT_PLAN.md](PROJECT_PLAN.md), [HARDWARE_SETUP.md](HARDWARE_SETUP.md), [ACCELEROMETER_SYSTEM.md](ACCELEROMETER_SYSTEM.md) (the wired-sensor concept the wearable units evolved from), [PHASE_0_TESTING.md](PHASE_0_TESTING.md), [LORA_FINETUNING.md](LORA_FINETUNING.md), [YOLO_POSE_GUIDE.md](YOLO_POSE_GUIDE.md). The current build in this README supersedes them: **two cameras you already own + $41 of sensors** instead of $431 of dedicated hardware.
+
+---
+
+## Cost
+
+| | This prototype | Original 3×Pi plan | Commercial systems |
+|---|---|---|---|
+| Hardware | **≈ $41** (sensors; cameras already owned) | $431–462 | $10,000–50,000 |
+| Monthly | **$0** (fully offline) | ~$21 (cloud) | $500+ |
+| Per session | **$0** | $0.005–0.02 | — |
+
+The optional Vision-LLM classification upgrade (`judo_hybrid_recognition.py` via OpenRouter) would add ~$0.01–0.10 per session when enabled.
 
 ---
 
 ## Roadmap
 
-- [x] **Phase 0:** Design system architecture (DONE)
-- [ ] **Phase 0.1:** Test OpenRouter on YouTube videos (THIS WEEK)
-- [ ] **Phase 0.2:** Auto-create labeled dataset with OCR (10 MINUTES)
-- [ ] **Phase 1:** Build 3-camera prototype (4 weeks)
-- [ ] **Phase 1.5:** Fine-tune model if needed ($40, 1 week)
-- [ ] **Phase 2:** Dashboard with video playback (4 weeks)
-- [ ] **Phase 3:** Deploy to 3-5 Serbian schools (3 months)
-- [ ] **Phase 4:** Add biometrics, audio, advanced features (6+ months)
-
----
-
-## Contributing
-
-This project is built to help kids in underfunded schools. Contributions welcome!
-
-**Ways to Help:**
-- Test Phase 0 scripts on your own judo videos
-- Improve OCR accuracy for technique name extraction
-- Optimize motion detection algorithm
-- Design dashboard UI/UX
-- Translate to Serbian (Cyrillic)
-- Donate hardware to Serbian schools
-
----
-
-## Success Stories (Coming Soon!)
-
-_This section will showcase schools using the system and athlete improvements._
-
----
-
-## Contact & Support
-
-- **GitHub Issues:** [Report bugs or request features](https://github.com/pashadude/LionOfJudo/issues)
-- **Discussions:** [Ask questions or share ideas](https://github.com/pashadude/LionOfJudo/discussions)
+- [x] Pose pipeline, technique rules, movement analysis (earlier phases)
+- [x] Two-camera audio sync, IMU ingest, throw segmentation, face blur, orchestrator
+- [x] ESP32-S3 firmware (compiled; awaiting hardware)
+- [ ] Bench test + mattress test (parts on order)
+- [ ] Dress rehearsal at a real training; tune `--threshold-g` for a child's throw forces
+- [ ] Technique classification upgrade (per-technique IMU signatures; optional Vision LLM)
+- [ ] Progress tracking across sessions (same athlete, same technique, power trend)
+- [ ] Multi-athlete support (more sensor sets)
 
 ---
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) file
+MIT — see [LICENSE](LICENSE).
 
 **Built with love for judo and kids who deserve better training tools.**
-
----
-
-## Acknowledgments
-
-- **Inspiration:** Professional sports science labs that cost $100k+
-- **Goal:** Make the same analysis available for $500
-- **Motivation:** Every kid should have access to quality coaching feedback, regardless of their school's budget
-
-**"The best time to plant a tree was 20 years ago. The second best time is now."**
-
-Let's give Serbian judo schools the tools they deserve. 🥋
