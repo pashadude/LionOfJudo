@@ -117,10 +117,21 @@ arduino-cli upload -p /dev/cu.usbmodem* --fqbn esp32:esp32:esp32s3:FlashSize=16M
 | `clip_extractor.py` | Frame-accurate ffmpeg re-encode cuts (stream-copy would snap to the Sony's sparse long-GOP keyframes). Optional downscale to 1080p for faster inference on 4K sources. |
 | `run_session.py` | The orchestrator. Reuses the existing analyzers unchanged: `VisualJudoAnalyzer` (skeleton overlay + pose JSON), `classify_technique` (rule-based recognition), `MovementAnalyzer` (movement phases). Writes `session_report.md` + `.json`. |
 
+**Learning components:**
+
+| Module | What it does |
+|---|---|
+| `pipeline/pose_features.py` | Clip → normalized pose-sequence features: picks the thrower (most hip-vertical travel), hip-centers and torso-scales every frame, resamples to 32 timesteps, adds joint angles + velocities. Cached as `.npz` beside each clip. |
+| `pipeline/train_classifier.py` | Trains a HistGradientBoosting classifier on the `dataset/` corpus with stratified k-fold CV; prints per-class precision/recall + confusion matrix and names the weakest class (= what to film next). Saves `models/technique_clf.joblib`. |
+| `tools/build_corpus.py` | Corpus builder: `--auto` sorts clips by technique slug in the filename, `--label` is a keypress UI for the rest, `--split-reps` cuts multi-rep drill videos into per-rep samples, `--from-session` feeds confirmed throws from processed sessions back into the dataset. Prints per-class counts every run. |
+
+**Corpus guidance:** own footage beats web scraping (same dojo, same angles, kid-sized dynamics). Layout: `dataset/<technique-slug>/clip.mp4` — folder = label. Count repetitions, not videos. **20 reps/class minimum, 50 solid, ~100 diminishing returns**; 5–8 techniques ≈ 150–400 samples. `run_session.py` uses the trained model automatically (`method: learned`) and falls back to the rules when none exists.
+
 **Tools:**
 - `tools/fetch_imu.py` — pulls logs from both units over WiFi, size-verifies, optional `--wipe`
 - `tools/imu_plot.py` — g-force/rotation plot with detected spikes and ritual marked; the threshold-tuning instrument
 - `tools/make_synthetic_log.py` — generates fake sensor logs so the whole pipeline can be tested with zero hardware
+- `tools/build_corpus.py` — dataset builder (see Learning components)
 
 **Dependencies:** the existing venv (ultralytics, opencv, scipy, numpy, torch) plus `lap` (ByteTrack) and the ffmpeg CLI. The YuNet model (230 KB) is committed in `models/`.
 
@@ -256,9 +267,11 @@ The optional Vision-LLM classification upgrade (`judo_hybrid_recognition.py` via
 - [x] Pose pipeline, technique rules, movement analysis (earlier phases)
 - [x] Two-camera audio sync, IMU ingest, throw segmentation, face blur, orchestrator
 - [x] ESP32-S3 firmware (compiled; awaiting hardware)
+- [x] Learned technique classifier: corpus tools, pose-sequence features, trainer with CV reporting, auto-integration with rules fallback
 - [ ] Bench test + mattress test (parts on order)
 - [ ] Dress rehearsal at a real training; tune `--threshold-g` for a child's throw forces
-- [ ] Technique classification upgrade (per-technique IMU signatures; optional Vision LLM)
+- [ ] Grow the corpus to ≥20 reps per technique and retrain (per-class table shows progress)
+- [ ] Technique classification upgrade: per-technique IMU signatures; optional Vision LLM
 - [ ] Progress tracking across sessions (same athlete, same technique, power trend)
 - [ ] Multi-athlete support (more sensor sets)
 

@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 .DS_Store
 sessions/
+*.npz
+models/*.joblib
+models/technique_labels.json
+dataset/

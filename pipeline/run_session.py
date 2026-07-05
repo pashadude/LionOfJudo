@@ -37,6 +37,39 @@ from pipeline.throw_segmenter import ThrowWindow, segment_throws
 
 UNIT_FILES = {"chest": "chest", "hip": "hip"}  # filename prefixes in --imu dir
 MIN_AUDIO_CONFIDENCE = 3.0
+CLF_PATH = REPO_ROOT / "models" / "technique_clf.joblib"
+CLF_LABELS_PATH = REPO_ROOT / "models" / "technique_labels.json"
+
+
+def load_learned_classifier():
+    """Return (clf, labels) if a trained model exists, else None.
+    Trained by pipeline/train_classifier.py from the dataset/ corpus."""
+    if not (CLF_PATH.exists() and CLF_LABELS_PATH.exists()):
+        return None
+    import joblib
+    return joblib.load(CLF_PATH), json.loads(CLF_LABELS_PATH.read_text())
+
+
+def classify_learned(clf_bundle, poses: list[dict]) -> dict | None:
+    """Classify a throw clip's pose sequence with the trained model."""
+    from pipeline.pose_features import features_from_poses
+
+    feats = features_from_poses(poses)
+    if feats is None:
+        return None
+    clf, labels = clf_bundle
+    import numpy as np
+    x = np.nan_to_num(feats["stats"], nan=0.0,
+                      posinf=0.0, neginf=0.0).reshape(1, -1)
+    proba = clf.predict_proba(x)[0]
+    best = int(proba.argmax())
+    return {
+        "technique": labels[best],
+        "confidence": round(float(proba[best]), 3),
+        "method": "learned",
+        "alternatives": {labels[i]: round(float(p), 3)
+                         for i, p in enumerate(proba) if i != best and p > 0.1},
+    }
 
 
 def log(msg: str) -> None:
@@ -222,6 +255,12 @@ def main() -> None:
     }
     movement = MovementAnalyzer()
 
+    clf_bundle = load_learned_classifier()
+    log("technique classifier: "
+        + ("learned (models/technique_clf.joblib)" if clf_bundle
+           else "rule-based fallback (train one with "
+                "pipeline/train_classifier.py)"))
+
     # One analyzer for all throws (loads the pose model once); output_dir is
     # retargeted per throw before each process_video call.
     visual = VisualJudoAnalyzer(output_dir=throws_dir)
@@ -273,11 +312,20 @@ def main() -> None:
                 poses = analysis["poses"]
                 feats = classifier.extract_throw_features(
                     poses, 0, len(poses) - 1)
-                tech = classifier.classify_technique(
+                rules = classifier.classify_technique(
                     {"features": feats,
                      "hip_drop_px": feats.get("max_hip_drop", 0)},
                     video_name="")
-                entry["technique"] = tech
+                rules["method"] = "rules"
+
+                learned = classify_learned(clf_bundle, poses) \
+                    if clf_bundle else None
+                if learned:
+                    entry["technique"] = learned
+                    if learned["technique"] not in rules["technique"]:
+                        entry["technique_rules_disagree"] = rules
+                else:
+                    entry["technique"] = rules
                 entry["movement_phases"] = len(
                     movement.extract_movement_phases(poses))
                 entry["analysis_json"] = json_path.name
@@ -304,9 +352,16 @@ def write_markdown_report(report: dict, path: Path) -> None:
         lines.append(f"### Throw {t['throw_id']} @ {t['t_peak_s']}s")
         tech = t.get("technique") or {}
         if tech:
+            detail = tech.get("reasoning") or ", ".join(
+                f"{k} {v}" for k, v in tech.get("alternatives", {}).items())
             lines.append(f"- **Technique:** {tech.get('technique', '?')} "
-                         f"(confidence {tech.get('confidence', '?')}) — "
-                         f"{tech.get('reasoning', '')}")
+                         f"(confidence {tech.get('confidence', '?')}, "
+                         f"{tech.get('method', 'rules')})"
+                         + (f" — {detail}" if detail else ""))
+            dis = t.get("technique_rules_disagree")
+            if dis:
+                lines.append(f"  - rules disagreed: {dis['technique']} "
+                             f"({dis.get('reasoning', '')})")
         for unit, pm in t.get("power", {}).items():
             lines.append(
                 f"- **{unit}:** peak {pm['peak_g']:.1f}g, "

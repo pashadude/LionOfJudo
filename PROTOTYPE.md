@@ -82,6 +82,44 @@ or battery problem.
 - `--vision-llm` is intentionally NOT implemented yet; the rule-based
   classifier (`phase0_judo_analysis.py`) runs offline at $0.
 
+## Training your own technique classifier
+
+The default rule-based recognition is weak. Train a real classifier from
+your own clips — no cloud, no cost:
+
+```bash
+# 1. Dump your clips into one folder, then auto-sort by filename
+#    (any file containing a technique slug like "o-goshi" gets filed):
+python tools/build_corpus.py --auto ~/JudoClips/inbox/
+
+# 2. Keypress-label whatever had no technique in the name:
+python tools/build_corpus.py --label ~/JudoClips/inbox/
+
+# 3. Split multi-repetition drill clips into one clip per rep:
+python tools/build_corpus.py --split-reps dataset/o-goshi/long_drill.mp4
+
+# 4. Extract pose features + train + see per-class accuracy:
+python -m pipeline.train_classifier --extract
+```
+
+Dataset layout: `dataset/<technique-slug>/clip.mp4` — **folder = label**,
+filenames inside don't matter. Count repetitions, not videos: a 60s drill
+video with 5 throws = 5 samples after `--split-reps`.
+
+**How much data:** 20 reps/technique = minimum, 50 = solid, ~100 =
+diminishing returns. 5–8 techniques → 150–400 samples total. Use your own
+footage (same dojo, same kid-sized bodies); web videos only to patch a
+class stuck under 20. The fastest data source is filming 10 minutes of
+nagekomi of whatever the confusion matrix says is the weakest class.
+
+`run_session.py` picks up `models/technique_clf.joblib` automatically and
+reports `method: learned` (falling back to rules when no model exists).
+After each session, feed confirmed throws back into the dataset:
+
+```bash
+python tools/build_corpus.py --from-session sessions/2026-07-05/
+```
+
 ## Bench-test checklist (Phase A/D, after parts arrive)
 
 1. Breadboard one unit, flash, power via USB away from home WiFi → logs.
