@@ -50,17 +50,13 @@ def load_learned_classifier():
     return joblib.load(CLF_PATH), json.loads(CLF_LABELS_PATH.read_text())
 
 
-def classify_learned(clf_bundle, poses: list[dict]) -> dict | None:
-    """Classify a throw clip's pose sequence with the trained model."""
-    from pipeline.pose_features import features_from_poses
-
-    feats = features_from_poses(poses)
-    if feats is None:
+def classify_learned(clf_bundle, stats) -> dict | None:
+    """Classify a throw's precomputed stats features with the trained model."""
+    if stats is None:
         return None
     clf, labels = clf_bundle
     import numpy as np
-    x = np.nan_to_num(feats["stats"], nan=0.0,
-                      posinf=0.0, neginf=0.0).reshape(1, -1)
+    x = np.nan_to_num(stats, nan=0.0, posinf=0.0, neginf=0.0).reshape(1, -1)
     proba = clf.predict_proba(x)[0]
     best = int(proba.argmax())
     return {
@@ -261,6 +257,12 @@ def main() -> None:
            else "rule-based fallback (train one with "
                 "pipeline/train_classifier.py)"))
 
+    from pipeline import reference_bank as refbank
+    bank = refbank.load_bank()
+    log("reference bank: "
+        + (f"{len(bank['X'])} clips loaded" if bank
+           else "none (build with pipeline/reference_bank.py --build)"))
+
     # One analyzer for all throws (loads the pose model once); output_dir is
     # retargeted per throw before each process_video call.
     visual = VisualJudoAnalyzer(output_dir=throws_dir)
@@ -318,7 +320,11 @@ def main() -> None:
                     video_name="")
                 rules["method"] = "rules"
 
-                learned = classify_learned(clf_bundle, poses) \
+                from pipeline.pose_features import features_from_poses
+                pf = features_from_poses(poses)
+                stats = pf["stats"] if pf else None
+
+                learned = classify_learned(clf_bundle, stats) \
                     if clf_bundle else None
                 if learned:
                     entry["technique"] = learned
@@ -326,6 +332,10 @@ def main() -> None:
                         entry["technique_rules_disagree"] = rules
                 else:
                     entry["technique"] = rules
+
+                if bank and stats is not None:
+                    entry["nearest_references"] = refbank.match(
+                        bank, stats, top_k=3)
                 entry["movement_phases"] = len(
                     movement.extract_movement_phases(poses))
                 entry["analysis_json"] = json_path.name
@@ -362,6 +372,11 @@ def write_markdown_report(report: dict, path: Path) -> None:
             if dis:
                 lines.append(f"  - rules disagreed: {dis['technique']} "
                              f"({dis.get('reasoning', '')})")
+        refs = t.get("nearest_references")
+        if refs:
+            lines.append("- **Nearest waza (full catalog):** " + ", ".join(
+                f"{r['waza']} {r['similarity']:.2f} [{r['category']}]"
+                for r in refs))
         for unit, pm in t.get("power", {}).items():
             lines.append(
                 f"- **{unit}:** peak {pm['peak_g']:.1f}g, "

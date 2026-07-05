@@ -112,6 +112,20 @@ footage (same dojo, same kid-sized bodies); web videos only to patch a
 class stuck under 20. The fastest data source is filming 10 minutes of
 nagekomi of whatever the confusion matrix says is the weakest class.
 
+**Two-tier recognition.** Besides the trained classifier (precise on the
+techniques with ≥20 reps), the full catalog — even waza with a single demo
+clip — powers a nearest-neighbor reference matcher:
+
+```bash
+python -m pipeline.pose_features dataset/       # extract everything (hours, cached)
+python -m pipeline.reference_bank --build       # build models/reference_bank.npz
+```
+
+Every detected throw then also gets "nearest waza" matches from the whole
+catalog in the report, each tagged `[throw]` (nage-waza) or `[hold]`
+(katame-waza, detected from the name: -gatame/-jime/-garami/...). Rebuild the
+bank whenever you add clips.
+
 `run_session.py` picks up `models/technique_clf.joblib` automatically and
 reports `method: learned` (falling back to rules when no model exists).
 After each session, feed confirmed throws back into the dataset:
