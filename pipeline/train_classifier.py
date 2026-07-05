@@ -62,10 +62,34 @@ def load_dataset(dataset_dir: Path, min_per_class: int
     return np.stack(X), np.array(y), labels
 
 
+def candidate_models():
+    """Candidates tried via CV; best one is kept. Important detail: tree
+    defaults like HGB's min_samples_leaf=20 silently collapse to a
+    majority-class predictor on small corpora — hence the explicit values."""
+    from sklearn.ensemble import (HistGradientBoostingClassifier,
+                                  RandomForestClassifier)
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    return {
+        "logreg": make_pipeline(
+            StandardScaler(),
+            LogisticRegression(max_iter=2000, C=0.1,
+                               class_weight="balanced")),
+        "random_forest": RandomForestClassifier(
+            n_estimators=400, min_samples_leaf=1,
+            class_weight="balanced", random_state=7),
+        "hist_gb": HistGradientBoostingClassifier(
+            min_samples_leaf=2, max_iter=200, max_depth=4,
+            l2_regularization=1.0, random_state=7),
+    }
+
+
 def main() -> None:
-    from sklearn.ensemble import HistGradientBoostingClassifier
     from sklearn.metrics import classification_report, confusion_matrix
-    from sklearn.model_selection import StratifiedKFold, cross_val_predict
+    from sklearn.model_selection import (StratifiedKFold, cross_val_predict,
+                                         cross_val_score)
     import joblib
 
     p = argparse.ArgumentParser()
@@ -94,14 +118,19 @@ def main() -> None:
 
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
-    clf = HistGradientBoostingClassifier(
-        max_iter=300, learning_rate=0.1, max_depth=4,
-        l2_regularization=1.0, random_state=7)
-
-    # ---- cross-validation report -----------------------------------------
+    # ---- model selection + cross-validation report -------------------------
+    candidates = candidate_models()
     n_splits = int(min(5, counts.min()))
     if n_splits >= 2:
         cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=7)
+        print(f"\nmodel selection ({n_splits}-fold CV):")
+        scores = {}
+        for name, m in candidates.items():
+            scores[name] = cross_val_score(m, X, y, cv=cv).mean()
+            print(f"  {name:16s} {scores[name]:.1%}")
+        best_name = max(scores, key=scores.get)
+        clf = candidates[best_name]
+        print(f"selected: {best_name}")
         y_pred = cross_val_predict(clf, X, y, cv=cv)
         acc = float((y_pred == y).mean())
         print(f"\n=== {n_splits}-fold CV accuracy: {acc:.1%} ===")
@@ -116,8 +145,9 @@ def main() -> None:
                       key=lambda i: (y_pred[y == i] == i).mean() if counts[i] else 1)
         print(f"\nweakest class: '{labels[weakest]}' — film more reps of it.")
     else:
+        clf = candidates["logreg"]
         print("\nToo few samples per class for cross-validation — "
-              "training anyway, but treat the model as a placeholder.")
+              "training logreg anyway, but treat the model as a placeholder.")
 
     # ---- final fit on everything ------------------------------------------
     clf.fit(X, y)
