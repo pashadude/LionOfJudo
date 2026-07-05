@@ -27,7 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 DATASET_DIR = REPO_ROOT / "dataset"
 MODEL_PATH = REPO_ROOT / "models" / "technique_clf.joblib"
 LABELS_PATH = REPO_ROOT / "models" / "technique_labels.json"
-VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv"}
+VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 def load_dataset(dataset_dir: Path, min_per_class: int

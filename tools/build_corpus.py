@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 DATASET_DIR = REPO_ROOT / "dataset"
-VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv"}
+VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 # Slugs matched inside filenames (loose: -, _, space all accepted).
 # Aliases map spelling variants to the canonical folder name.

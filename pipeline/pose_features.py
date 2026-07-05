@@ -23,7 +23,7 @@ import numpy as np
 
 SEQ_LEN = 32
 KPT_CONF = 0.3
-VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv"}
+VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 # keypoint indices (COCO)
 L_SHO, R_SHO, L_ELB, R_ELB, L_WRI, R_WRI = 5, 6, 7, 8, 9, 10
