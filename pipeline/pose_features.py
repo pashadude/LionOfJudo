@@ -174,6 +174,40 @@ def extract_clip_features(video_path: Path, model, device: str = "mps",
     return feats
 
 
+# channel layout per timestep (41 base + 41 velocity = 82):
+#   0..33  normalized keypoint coords x0,y0,x1,y1,... (17 kpts)
+#   34..39 joint angles: L-elbow, R-elbow, L-knee, R-knee, L-hip, R-hip
+#   40     torso lean (unsigned)
+_KPT_LR = [(1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12),
+           (13, 14), (15, 16)]  # (left,right) keypoint index pairs
+
+
+def _flip_maps() -> tuple[np.ndarray, np.ndarray]:
+    """(permutation, sign) turning a 41-channel frame into its mirror."""
+    perm = np.arange(41)
+    for l, r in _KPT_LR:
+        perm[[2 * l, 2 * r]] = perm[[2 * r, 2 * l]]          # x
+        perm[[2 * l + 1, 2 * r + 1]] = perm[[2 * r + 1, 2 * l + 1]]  # y
+    for l, r in [(34, 35), (36, 37), (38, 39)]:              # L/R angles
+        perm[[l, r]] = perm[[r, l]]
+    sign = np.ones(41)
+    sign[0:34:2] = -1.0                                      # negate x
+    return perm, sign
+
+
+def flip_seq(seq: np.ndarray) -> np.ndarray:
+    """Mirror a (SEQ_LEN, 82) feature sequence left<->right."""
+    perm, sign = _flip_maps()
+    full_perm = np.concatenate([perm, perm + 41])
+    full_sign = np.concatenate([sign, sign])
+    return seq[:, full_perm] * full_sign
+
+
+def stats_from_seq(seq: np.ndarray) -> np.ndarray:
+    return np.concatenate([seq.min(0), seq.max(0),
+                           seq.mean(0), seq.std(0)]).astype(np.float32)
+
+
 def _finalize(track) -> dict[str, np.ndarray] | None:
     if track is None or len(track) < 8:
         return None
@@ -184,10 +218,8 @@ def _finalize(track) -> dict[str, np.ndarray] | None:
     vel = np.diff(seq, axis=0, prepend=seq[:1])
     seq_full = np.concatenate([seq, vel], axis=1)      # (32, 2C)
 
-    stats = np.concatenate([seq_full.min(0), seq_full.max(0),
-                            seq_full.mean(0), seq_full.std(0)])
     return {"seq": seq_full.astype(np.float32),
-            "stats": stats.astype(np.float32)}
+            "stats": stats_from_seq(seq_full)}
 
 
 def main() -> None:

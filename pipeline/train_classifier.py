@@ -16,6 +16,7 @@ and a confusion matrix, then fits on all data and saves:
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -30,13 +31,23 @@ LABELS_PATH = REPO_ROOT / "models" / "technique_labels.json"
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
+def group_key(clip: Path) -> str:
+    """Same source video -> same CV group (rep splits, youtube ids)."""
+    m = re.search(r"\[([A-Za-z0-9_-]{6,})\]", clip.stem)
+    if m:
+        return m.group(1)                      # youtube id
+    return re.sub(r"_rep\d+$", "", clip.stem)  # rep splits share the source
+
+
 def load_dataset(dataset_dir: Path, min_per_class: int,
-                 exclude: tuple[str, ...] = ("youtube_",)
-                 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
+                 exclude: tuple[str, ...] = ("youtube_",), *,
+                 with_seq: bool = False):
+    """Returns (X_stats, y, labels) or, with_seq, (X_stats, y, labels,
+    seqs, groups)."""
     from pipeline.label_check import build_vocab, check_clip
 
     vocab = build_vocab(dataset_dir) if dataset_dir.exists() else {}
-    X, y, labels = [], [], []
+    X, y, labels, seqs, groups = [], [], [], [], []
     skipped_classes = []
     n_suspect = 0
     for d in sorted(dataset_dir.iterdir()):
@@ -53,14 +64,18 @@ def load_dataset(dataset_dir: Path, min_per_class: int,
                 continue
             cache = clip.with_suffix(".npz")
             if cache.exists():
-                feats.append(np.load(cache)["stats"])
+                data = np.load(cache)
+                feats.append((data["stats"], data["seq"], group_key(clip)))
         if len(feats) < min_per_class:
             skipped_classes.append((d.name, len(feats)))
             continue
         idx = len(labels)
         labels.append(d.name)
-        X.extend(feats)
-        y.extend([idx] * len(feats))
+        for st, sq, g in feats:
+            X.append(st)
+            seqs.append(sq)
+            groups.append(g)
+            y.append(idx)
 
     if n_suspect:
         print(f"  ({n_suspect} clips excluded by filename/folder cross-check "
@@ -72,6 +87,9 @@ def load_dataset(dataset_dir: Path, min_per_class: int,
         raise SystemExit(
             "No usable classes. Add clips to dataset/<technique>/ and run:\n"
             "  python -m pipeline.pose_features dataset/")
+    if with_seq:
+        return (np.stack(X), np.array(y), labels,
+                np.stack(seqs), np.array(groups))
     return np.stack(X), np.array(y), labels
 
 
@@ -99,10 +117,32 @@ def candidate_models():
     }
 
 
+def augment_flip(X_stats, y, seqs):
+    """Append left/right-mirrored copies. TRAINING folds only — augmenting
+    before the CV split would leak mirror-twins across folds."""
+    from pipeline.pose_features import flip_seq, stats_from_seq
+    X_aug = np.stack([stats_from_seq(flip_seq(s)) for s in seqs])
+    return (np.concatenate([X_stats, X_aug]),
+            np.concatenate([y, y]))
+
+
+def grouped_cv_predict(make_clf, X, y, seqs, groups, n_splits):
+    """Grouped, stratified CV with in-fold flip augmentation.
+    Returns out-of-fold predictions for every sample."""
+    from sklearn.model_selection import StratifiedGroupKFold
+
+    y_pred = np.full_like(y, -1)
+    cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=7)
+    for tr, te in cv.split(X, y, groups):
+        Xtr, ytr = augment_flip(X[tr], y[tr], seqs[tr])
+        clf = make_clf()
+        clf.fit(Xtr, ytr)
+        y_pred[te] = clf.predict(X[te])
+    return y_pred
+
+
 def main() -> None:
     from sklearn.metrics import classification_report, confusion_matrix
-    from sklearn.model_selection import (StratifiedKFold, cross_val_predict,
-                                         cross_val_score)
     import joblib
 
     p = argparse.ArgumentParser()
@@ -126,29 +166,35 @@ def main() -> None:
                     part.startswith("youtube_") for part in clip.parts):
                 extract_clip_features(clip, model, args.device)
 
-    X, y, labels = load_dataset(args.dataset, args.min_per_class)
+    X, y, labels, seqs, groups = load_dataset(
+        args.dataset, args.min_per_class, with_seq=True)
     n_classes = len(labels)
     counts = np.bincount(y, minlength=n_classes)
-    print(f"\n{len(X)} samples, {n_classes} classes:")
+    print(f"\n{len(X)} samples, {n_classes} classes, "
+          f"{len(set(groups))} source-video groups:")
     for i, lab in enumerate(labels):
         print(f"  {lab:24s} {counts[i]:4d}")
 
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    seqs = np.nan_to_num(seqs, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # ---- model selection + cross-validation report -------------------------
+    # ---- model selection + grouped CV with flip augmentation ---------------
     candidates = candidate_models()
     n_splits = int(min(5, counts.min()))
     if n_splits >= 2:
-        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=7)
-        print(f"\nmodel selection ({n_splits}-fold CV):")
-        scores = {}
-        for name, m in candidates.items():
-            scores[name] = cross_val_score(m, X, y, cv=cv).mean()
+        print(f"\nmodel selection ({n_splits}-fold grouped CV, "
+              f"flip-augmented):")
+        scores, preds = {}, {}
+        for name in candidates:
+            p = grouped_cv_predict(lambda n=name: candidate_models()[n],
+                                   X, y, seqs, groups, n_splits)
+            scores[name] = float((p == y).mean())
+            preds[name] = p
             print(f"  {name:16s} {scores[name]:.1%}")
         best_name = max(scores, key=scores.get)
         clf = candidates[best_name]
         print(f"selected: {best_name}")
-        y_pred = cross_val_predict(clf, X, y, cv=cv)
+        y_pred = preds[best_name]
         acc = float((y_pred == y).mean())
         print(f"\n=== {n_splits}-fold CV accuracy: {acc:.1%} ===")
         print(classification_report(y, y_pred, target_names=labels,
@@ -166,8 +212,9 @@ def main() -> None:
         print("\nToo few samples per class for cross-validation — "
               "training logreg anyway, but treat the model as a placeholder.")
 
-    # ---- final fit on everything ------------------------------------------
-    clf.fit(X, y)
+    # ---- final fit on everything (flip-augmented) ---------------------------
+    Xf, yf = augment_flip(X, y, seqs)
+    clf.fit(Xf, yf)
     MODEL_PATH.parent.mkdir(exist_ok=True)
     joblib.dump(clf, MODEL_PATH)
     LABELS_PATH.write_text(json.dumps(labels, indent=2))
