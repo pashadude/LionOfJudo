@@ -179,6 +179,16 @@ LinkedIn: [linkedin.com/in/pavel-dudko-969ba659](https://www.linkedin.com/in/pav
 This is not a hobbyist learning AI on his kid — it is a professional AI
 product builder pointing two decades of experience at his son's sport.
 
+**Milan Zdravković — scientific consultant.**
+Pavel's former ZENPULSAR colleague and research co-author — **two joint
+Springer publications (2024 and 2025)** on machine learning over
+social-media signals for financial markets. Directly relevant track
+record: developed a
+**phone-based skiing accelerometer analysis app** built on a concept
+Pavel proposed — the same IMU-motion-analysis approach LionOfJudo brings
+to the tatami, already proven on the slopes.
+LinkedIn: [linkedin.com/in/milanzdravkovic](https://www.linkedin.com/in/milanzdravkovic)
+
 **Judo Club Niš — pilot club.** The oldest judo club in the city. Five
 collaborating trainers and judges including a former Serbian national
 team trainer; two committed pilot athletes including Serbia's #1 U14.
