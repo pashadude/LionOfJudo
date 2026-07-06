@@ -62,7 +62,15 @@ training dataset.
 
 ## The market today — and the gap we fill
 
-Every existing option fails the ordinary trainer on price, on precision,
+Judo is one of the most practiced sports on the planet: **20–40 million
+practitioners** (IJF figures) organized under **205 national federations
+across all five continents** — an Olympic sport since 1964, and in many
+countries a default childhood sport taught in schools. The overwhelming
+majority of those millions train in ordinary clubs like ours, coached by
+trainers who have never had a single instrument beyond their own eyes.
+That — not the handful of national-team labs — is the market.
+
+Every existing option fails that ordinary trainer on price, on precision,
 or on both:
 
 | Solution | Real cost | What an ordinary judo trainer gets |
