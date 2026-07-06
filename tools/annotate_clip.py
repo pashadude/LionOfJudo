@@ -64,8 +64,14 @@ def draw_panel(frame: np.ndarray, top3: list[tuple[str, float]],
                     cv2.LINE_AA)
         y += row
     else:
-        bar_x = int(w * 0.42)
-        bar_w_max = int(w * 0.42)
+        # bars start after the longest name — works in portrait too
+        name_w = max(cv2.getTextSize(f"{r}. {wz}", cv2.FONT_HERSHEY_SIMPLEX,
+                                     fs * 1.1, th)[0][0]
+                     for r, (wz, _) in enumerate(top3, 1))
+        bar_x = x_text + name_w + int(w * 0.03)
+        pct_w = cv2.getTextSize("100%", cv2.FONT_HERSHEY_SIMPLEX,
+                                fs, th)[0][0]
+        bar_w_max = max(int(w * 0.1), w - bar_x - pct_w - int(w * 0.05))
         for rank, (waza, p) in enumerate(top3, 1):
             color = ACCENT if rank == 1 else (170, 170, 170)
             cv2.putText(frame, f"{rank}. {waza}", (x_text, y),
@@ -83,10 +89,18 @@ def draw_panel(frame: np.ndarray, top3: list[tuple[str, float]],
             y += row
 
     if refs:
-        cv2.putText(frame, "catalog matches: " + "   ".join(
-            f"{r['waza']} {r['similarity']:.2f}" for r in refs),
-            (x_text, y), cv2.FONT_HERSHEY_SIMPLEX, fs * 0.85,
-            (150, 150, 150), max(1, th - 1), cv2.LINE_AA)
+        items = [f"{r['waza']} {r['similarity']:.2f}" for r in refs]
+        while items:
+            text = "catalog matches: " + "   ".join(items)
+            tw = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX,
+                                 fs * 0.85, max(1, th - 1))[0][0]
+            if x_text + tw <= w - int(w * 0.02):
+                break
+            items.pop()
+        if items:
+            cv2.putText(frame, "catalog matches: " + "   ".join(items),
+                        (x_text, y), cv2.FONT_HERSHEY_SIMPLEX, fs * 0.85,
+                        (150, 150, 150), max(1, th - 1), cv2.LINE_AA)
         y += row
 
     cv2.putText(frame, "LionOfJudo | pose + power analysis",
