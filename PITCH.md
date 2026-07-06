@@ -39,6 +39,18 @@ athlete's is blurred automatically, by design.
 | Showcase video output (recognition panel with probabilities) | ✅ **demoed on real competition footage — 2 of 2 throws recognized correctly** (o-soto-gari, uchi-mata) |
 | Wearable sensor units (ESP32 + IMU, in-gi, child-safe mounting) | 🔶 firmware compiled & tested in software; hardware parts arrive ~3 weeks |
 
+### See it yourself — real competition footage, public links
+
+| | |
+|---|---|
+| **O-soto-gari, recognized at 52%** (catalog cross-check agrees, 0.95) | [youtube.com/shorts/LzWIkl6T21w](https://youtube.com/shorts/LzWIkl6T21w) |
+| **Uchi-mata, recognized correctly** | [youtu.be/B9TNP2kZUlI](https://youtu.be/B9TNP2kZUlI) |
+
+![Demo QR — shorts](docs/qr_demo_shorts.png) ![Demo QR — full](docs/qr_demo_full.png)
+
+*Scan either code. Every spectator's and child's face was blurred
+automatically — no editor touched these videos.*
+
 **Validation.** The demo was reviewed by five Judo Club Niš trainers,
 judoka and judges: **Marko Radulović, Stevan Vukadinović, Vladimir
 Spasić, Uroš Kostadinović, and Dragan Spasić — former national trainer
@@ -47,6 +59,43 @@ one of them Serbia's #1 in U14 — as pilot athletes** to build the
 training dataset.
 
 ---
+
+## The market today — and the gap we fill
+
+Every existing option fails the ordinary trainer on price, on precision,
+or on both:
+
+| Solution | Real cost | What an ordinary judo trainer gets |
+|---|---|---|
+| Optical mocap labs (Vicon, Motion Analysis) | **$20,000–250,000+** install, plus $3,000–6,000/yr software | Nothing — these live in federation labs and universities, not clubs |
+| Inertial mocap suits (Movella/Xsens MVN) | **~$4,600 hardware + $3,800/yr** software; real total 3–5× sticker | Full-body suit per athlete — impractical on a tatami, unaffordable at club scale |
+| Video analysis platforms (Dartfish, Hudl) | $140–1,000+/yr per coach, quote-based for clubs | Manual tagging and slow-motion drawing — the coach still does all the analysis by hand; **no automatic technique recognition, no force measurement** |
+| Academic IMU research (taekwondo, gymnastics, basketball action recognition, 90%+ accuracies) | Papers, not products | Nothing purchasable — and none of it targets judo |
+
+**And there is a precision problem money doesn't solve:** judo evolves
+fast — new grips, hybrid entries, drop variations appear at international
+level every season. Two techniques can look nearly identical on video
+(uchi-mata vs o-guruma, kouchi vs ouchi in a scramble). **Video-only
+systems fundamentally cannot resolve them.** Our in-gi accelerometers
+capture the throw's mechanical signature — impact g-force, rotation
+profile, timing — which disambiguates what pixels cannot. That is the
+"cheap AND precise" claim: pose AI for the shape, physics for the truth.
+
+**Business model — for the people first, sustainable second:**
+- **DIY tier (free forever, MIT license):** any parent or trainer with a
+  laptop and $40 of parts builds it from our repository. This is the
+  mission: every kid, every school.
+- **Club kit (paid):** assembled sensors, pre-configured processing
+  station, setup afternoon, support — for clubs that want it working, not
+  a soldering project.
+- **Federation tier (paid, later):** multi-club deployments, athlete
+  registries, season analytics, national talent-scouting dashboards —
+  priced against the $20k+ lab alternatives they currently can't afford
+  at scale.
+
+The free tier is not charity against the paid tiers — it is the funnel
+and the dataset engine. Every DIY club that adopts it makes the
+recognition models better for everyone.
 
 ## Why this is hard to copy
 
