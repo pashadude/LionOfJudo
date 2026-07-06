@@ -30,12 +30,13 @@ LABELS_PATH = REPO_ROOT / "models" / "technique_labels.json"
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
-def load_dataset(dataset_dir: Path, min_per_class: int
+def load_dataset(dataset_dir: Path, min_per_class: int,
+                 exclude: tuple[str, ...] = ("youtube_",)
                  ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     X, y, labels = [], [], []
     skipped_classes = []
     for d in sorted(dataset_dir.iterdir()):
-        if not d.is_dir():
+        if not d.is_dir() or any(d.name.startswith(x) for x in exclude):
             continue
         feats = []
         for clip in sorted(d.iterdir()):
@@ -106,7 +107,8 @@ def main() -> None:
         from pipeline.pose_features import extract_clip_features
         model = YOLO(str(REPO_ROOT / "yolo11x-pose.pt"))
         for clip in sorted(args.dataset.rglob("*")):
-            if clip.suffix.lower() in VIDEO_EXTS:
+            if clip.suffix.lower() in VIDEO_EXTS and not any(
+                    part.startswith("youtube_") for part in clip.parts):
                 extract_clip_features(clip, model, args.device)
 
     X, y, labels = load_dataset(args.dataset, args.min_per_class)

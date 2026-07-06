@@ -41,7 +41,7 @@ def waza_category(name: str) -> str:
 def build_bank(dataset_dir: Path = DATASET_DIR) -> dict:
     feats, labels = [], []
     for d in sorted(dataset_dir.iterdir()):
-        if not d.is_dir():
+        if not d.is_dir() or d.name.startswith("youtube_"):
             continue
         for npz in sorted(d.glob("*.npz")):
             try:
