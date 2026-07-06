@@ -7,16 +7,17 @@
 
 ## The story
 
-A year ago my son walked into Judo Club Niš. Twelve months later he took 4th
-at an international tournament, gold at a local one, and was moved to the
-senior group at age 8. His coaches say the word "Olympic" out loud.
+A year ago my son Lev walked into **Judo Club Niš — the oldest judo club in
+the city**. Twelve months later he took **5th at an international
+tournament and 1st at the local one**, and was moved to the senior group at
+age 8. His coaches say the word "Olympic" out loud.
 
 Elite federations answer that kind of talent with sports-science labs:
 multi-camera motion capture, force measurement, technique analytics —
-$10,000–50,000 per installation, plus $500+/month to run. A club in Niš
+**$10,000–50,000 per installation, plus $500+/month** to run. A club in Niš
 will never have that. So I built it in my garage.
 
-**LionOfJudo turns two ordinary cameras and $40 of sensors into a
+**LionOfJudo turns two ordinary cameras and ~$40 of sensors into a
 professional analysis system** — technique recognition, biomechanical
 skeleton tracking, and (sensor units arriving now) direct measurement of
 throw power in g-force and rotation speed. It runs offline on a laptop.
@@ -38,12 +39,12 @@ athlete's is blurred automatically, by design.
 | Showcase video output (recognition panel with probabilities) | ✅ **demoed on real competition footage — 2 of 2 throws recognized correctly** (o-soto-gari, uchi-mata) |
 | Wearable sensor units (ESP32 + IMU, in-gi, child-safe mounting) | 🔶 firmware compiled & tested in software; hardware parts arrive ~3 weeks |
 
-**Validation:** the demo was reviewed by five Judo Club Niš
-trainers, judoka and judges — Marko Radulović, Stevan Vukadinović,
-Vladimir Spasić, Uroš Kostadinović, and **Dragan Spasić, former national
-trainer of the Serbian team**. Outcome: the club committed **two young
-judokas — one of them Serbia's #1 in U14 — as pilot athletes** to build
-the training dataset.
+**Validation.** The demo was reviewed by five Judo Club Niš trainers,
+judoka and judges: **Marko Radulović, Stevan Vukadinović, Vladimir
+Spasić, Uroš Kostadinović, and Dragan Spasić — former national trainer
+of the Serbian team**. Outcome: the club committed **two young judokas —
+one of them Serbia's #1 in U14 — as pilot athletes** to build the
+training dataset.
 
 ---
 
@@ -67,45 +68,80 @@ the training dataset.
 
 ---
 
-## The plan
+## The full roadmap — funded once, delivered in stages
 
-**Phase 1 — Instrumented pilot (weeks 1–6, starts when parts arrive ~3 weeks)**
-- Assemble & bench-test 2 wearable sensor units; dress rehearsal at home
-  with my son (the garage lab continues)
+**Phase 1 — Instrumented pilot** *(weeks 1–6; starts when parts arrive, ~3 weeks)*
+- Assemble & bench-test wearable sensor units; dress rehearsal at home
+  with Lev (the garage lab continues — that's the story we film)
 - First instrumented sessions at Judo Club Niš with the 2 pilot athletes
-- First reports with measured throw power delivered to the trainers
+- First reports with **measured throw power** delivered to the trainers
 
-**Phase 2 — Dataset & accuracy sprint (weeks 4–12, overlaps)**
-- Trainers label competition/training footage with the one-keypress tool
-  (no technical skill needed)
-- Target: 50+ repetitions per technique for the 10 techniques the pilot
-  athletes actually compete with → recognition accuracy on *our* athletes
-  goes from baseline to production-grade
+**Phase 2 — Dataset & accuracy sprint** *(weeks 4–12, overlaps)*
+- Trainers label competition/training footage with a one-keypress tool
+  (no technical skill needed) — five experts labeling their own athletes
+  out-produces any internet scraping
 - Held-out evaluation on real competition footage after every retrain
+- Target: 50+ labeled repetitions per technique for the pilot athletes'
+  competition repertoire → recognition on *our* athletes reaches
+  production grade
 
-**Phase 3 — Trainer product (months 3–5)**
-- Per-athlete progress dashboard: technique quality trend, power trend,
-  session-to-session comparison
-- Serbian-language reports; PDF export for parents
-- Second sensor kit set; 5+ athletes instrumented
+**Phase 3 — The trainer product** *(months 3–5)*
+- **Per-athlete progress dashboard**: technique quality trend, power trend
+  (g-force / rotation per waza over the season), session-to-session and
+  training-vs-competition comparison
+- **Technique quality scoring**: trainer-labeled good/needs-work examples
+  teach the system to explain *why* — hip height, entry timing, kuzushi —
+  turning it from a recorder into an assistant coach
+- **Per-waza power signatures** from the IMU data: each throw's
+  acceleration profile compared against the athlete's own best
+- Serbian-language reports; PDF exports for parents (a club revenue
+  opportunity)
+- Sensor kits for 5+ athletes
 
-**Phase 4 — Beyond one club (months 6+)**
-- Packaged kit (sensors, mounting, software image) reproducible by any club
-- Pilot #2 at a second Serbian club; federation conversation with results
-  in hand
+**Phase 4 — Ne-waza (ground work) + next-generation model** *(months 5–8)*
+- Ground-work segmentation and recognition (the 48-hold catalog is already
+  in the reference bank; ne-waza needs its own detection logic)
+- Upgrade the classifier to a temporal neural network trained on the
+  pose sequences the pipeline already stores — the architecture step that
+  historically doubles accuracy once a corpus matures
+- Optional vision-LLM assist for rare techniques
+
+**Phase 5 — Beyond one club** *(months 6–12)*
+- Packaged replication kit: sensors, mounting, software image, setup guide
+  — any club can deploy in an afternoon
+- Pilot #2 at a second Serbian club
+- Federation conversation with a season of measured results in hand
+- Publication of pilot results (methodology + anonymized data) — the
+  academic credibility that opens federation and EU sport-fund doors
 
 ---
 
-## What sponsorship buys
+## The ask
 
-| Tier | Amount | What it funds | What the sponsor gets |
-|---|---|---|---|
-| **Kit sponsor** | €500 | Sensor kits for 5 athletes, spare cameras/tripods, mounting materials | Logo on every showcase video & report the club produces |
-| **Pilot sponsor** | €2,500 | Above + dedicated processing laptop for the club + 6 months of my focused development time on the trainer dashboard | Naming on the pilot program, first access to results, demo events |
-| **Program partner** | €10,000 | Above + second club rollout + Serbian localization + packaged replication kit | Partner branding, co-announcement with club(s), seat at the federation conversation |
+I am raising **once, for the full 12-month program** — I would rather
+over-deliver than come back mid-season asking twice.
 
-Every euro goes to hardware and building — the software stack is
-deliberately $0/month (no cloud, no licenses, open source, MIT).
+### Full program budget: €25,000
+
+| Line | € | Covers |
+|---|---|---|
+| Sensor & camera hardware | 2,500 | 10 athlete sensor kits + spares, 2 dedicated cameras + tripods, mounting materials |
+| Club processing station | 1,500 | Mac mini class machine living at the club — overnight processing without my laptop |
+| Development time | 15,000 | 12 months part-time focused work: dashboard, quality scoring, ne-waza, neural model, replication kit |
+| Trainer collaboration | 3,000 | Labeling sessions, filming sessions, competition travel for data collection |
+| Second-club rollout + localization | 2,000 | Kit for pilot club #2, Serbian localization, printed materials |
+| Contingency | 1,000 | Broken sensors, reshoots, the unglamorous reality of hardware |
+
+### Sponsorship tiers
+
+| Tier | Amount | What the sponsor gets |
+|---|---|---|
+| **Kit sponsor** | €1,000 | Logo on every showcase video & report the club produces for a year |
+| **Pilot sponsor** | €5,000 | Above + naming on the pilot program + demo event at the club + first access to results |
+| **Program partner** | €25,000 | The full program: partner branding on everything, co-announcement with the club, seat at the federation conversation, and the replication kit carries your name to every future club |
+
+The software stays **open source (MIT) and $0/month by design** — every
+euro goes to hardware, people, and time, not licenses or cloud bills.
 
 ---
 
@@ -114,29 +150,42 @@ deliberately $0/month (no cloud, no licenses, open source, MIT).
 We show sponsors the same numbers we use internally:
 
 - Technique recognition today: 26 trained techniques; on the live
-  competition demo it went 2/2 with the reference catalog agreeing.
+  competition demo it went **2/2 with the reference catalog agreeing**.
   Across the full corpus the honest cross-validated baseline is ~23%
   top-1 over 26 classes (chance = 4%) — trained mostly on heterogeneous
-  internet instructionals. This number is the *floor*: the entire Phase 2
-  exists because accuracy follows data, and the pilot generates exactly
-  the right data (our athletes, our cameras, trainer-labeled).
+  internet instructionals. This number is the *floor*: accuracy follows
+  data, and the pilot generates exactly the right data (our athletes,
+  our cameras, trainer-labeled). Phases 2 and 4 exist precisely to move it.
 - The physics does not need training: skeleton tracking, sync, face
-  blurring, and (with sensors) g-force/rotation measurement work today at
-  production quality.
+  blurring, and (with sensors) g-force/rotation measurement work today
+  at production quality.
 
 ---
 
 ## Who
 
-**Paul Dudko** — engineer, judo parent, founder. Built the entire current
-stack solo in a garage. Contact: paul.dudko@zenpulsar.com
+**Pavel Dudko — founder.**
+20 years in machine learning. Co-founder & Head of Product and Data
+Science at **ZENPULSAR** (London) — an AI company processing billions of
+social-media data points in real time for hedge funds and commodity
+traders; graduate of **Google AI First 2023**. Previously founded three
+startups (two accelerated — Bolt/Spain, Metavallon/Greece; one revenue-
+generating for 5 years), Manager of Corporate Strategy at **PwC**.
+MSc Mathematics & Computer Science, **Lomonosov Moscow State University**.
+Published ML researcher (Springer, 2024 & 2025). Based in Niš.
+LinkedIn: [linkedin.com/in/pavel-dudko-969ba659](https://www.linkedin.com/in/pavel-dudko-969ba659/)
+· pavel.dudko@gmail.com · +381 63 773 81 79
 
-**Judo Club Niš** — pilot club: five collaborating trainers/judges
-including a former Serbian national team trainer; two committed pilot
-athletes including Serbia's #1 U14.
+This is not a hobbyist learning AI on his kid — it is a professional AI
+product builder pointing two decades of experience at his son's sport.
 
-**The first user** — an 8-year-old who might be an Olympian, whose father
-refuses to let talent be limited by a club's budget.
+**Judo Club Niš — pilot club.** The oldest judo club in the city. Five
+collaborating trainers and judges including a former Serbian national
+team trainer; two committed pilot athletes including Serbia's #1 U14.
+
+**The first user** — Lev, 8 years old, 5th internationally and 1st
+locally after a single year of judo, whose father refuses to let talent
+be limited by a club's budget.
 
 ---
 
