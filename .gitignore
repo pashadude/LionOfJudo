@@ -9,3 +9,4 @@ sessions/
 models/*.joblib
 models/technique_labels.json
 dataset/
+eval_set/

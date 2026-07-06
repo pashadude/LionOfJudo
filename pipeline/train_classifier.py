@@ -99,6 +99,9 @@ def main() -> None:
                    help="classes with fewer extracted samples are skipped")
     p.add_argument("--extract", action="store_true",
                    help="run feature extraction on the dataset first")
+    p.add_argument("--eval-dir", type=Path, default=None,
+                   help="held-out eval set (eval_set/<technique>/ layout, "
+                        "never trained on) to score the final model against")
     p.add_argument("--device", default="mps")
     args = p.parse_args()
 
@@ -158,6 +161,28 @@ def main() -> None:
     LABELS_PATH.write_text(json.dumps(labels, indent=2))
     print(f"\nsaved {MODEL_PATH.relative_to(REPO_ROOT)} "
           f"and {LABELS_PATH.relative_to(REPO_ROOT)}")
+
+    # ---- held-out eval set (the number to trust) ---------------------------
+    if args.eval_dir and args.eval_dir.exists():
+        print(f"\n=== held-out eval: {args.eval_dir} ===")
+        Xe, ye_raw, eval_labels = load_dataset(args.eval_dir, 1)
+        known = [i for i, lab in enumerate(eval_labels) if lab in labels]
+        unknown = [lab for lab in eval_labels if lab not in labels]
+        if unknown:
+            print(f"  (skipping techniques the model wasn't trained on: "
+                  f"{', '.join(unknown)})")
+        mask = np.isin(ye_raw, known)
+        if not mask.any():
+            print("  no eval clips match trained classes")
+            return
+        Xe = np.nan_to_num(Xe[mask], nan=0.0, posinf=0.0, neginf=0.0)
+        ye = np.array([labels.index(eval_labels[i]) for i in ye_raw[mask]])
+        pred = clf.predict(Xe)
+        acc = float((pred == ye).mean())
+        print(f"  accuracy on {len(ye)} real-footage clips: {acc:.1%}")
+        for i, p_ in zip(ye, pred):
+            mark = "✓" if i == p_ else "✗"
+            print(f"    {mark} true={labels[i]:24s} pred={labels[p_]}")
 
 
 if __name__ == "__main__":
