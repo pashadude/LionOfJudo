@@ -30,15 +30,68 @@ from pipeline.run_session import load_learned_classifier, \
     classify_learned                                               # noqa: E402
 
 
-def banner(frame: np.ndarray, lines: list[str]) -> np.ndarray:
+ACCENT = (60, 220, 255)      # gold-ish (BGR)
+BAR_BG = (60, 60, 60)
+
+
+def draw_panel(frame: np.ndarray, top3: list[tuple[str, float]],
+               refs: list[dict] | None, override: str | None) -> np.ndarray:
+    """Recognition panel: top-3 waza with probability bars + footer."""
     h, w = frame.shape[:2]
-    pad = int(h * 0.055) * (len(lines) + 1)
-    cv2.rectangle(frame, (0, h - pad), (w, h), (20, 20, 20), -1)
-    for i, text in enumerate(lines):
-        y = h - pad + int(h * 0.055) * (i + 1)
-        cv2.putText(frame, text, (int(w * 0.02), y),
-                    cv2.FONT_HERSHEY_SIMPLEX, h / 900, (60, 220, 255),
-                    max(1, h // 500), cv2.LINE_AA)
+    row = int(h * 0.052)
+    n_rows = (1 if override else max(1, len(top3))) + (1 if refs else 0) + 2
+    panel_h = row * n_rows + row // 2
+    y0 = h - panel_h
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, y0), (w, h), (18, 14, 10), -1)
+    cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
+    cv2.line(frame, (0, y0), (w, y0), ACCENT, max(1, h // 400))
+
+    fs = h / 1100
+    th = max(1, h // 550)
+    x_text = int(w * 0.02)
+    y = y0 + row
+
+    cv2.putText(frame, "WAZA RECOGNITION", (x_text, y),
+                cv2.FONT_HERSHEY_SIMPLEX, fs, (200, 200, 200), th,
+                cv2.LINE_AA)
+    y += row
+
+    if override:
+        cv2.putText(frame, override.upper(), (x_text, y),
+                    cv2.FONT_HERSHEY_TRIPLEX, fs * 1.5, ACCENT, th,
+                    cv2.LINE_AA)
+        y += row
+    else:
+        bar_x = int(w * 0.42)
+        bar_w_max = int(w * 0.42)
+        for rank, (waza, p) in enumerate(top3, 1):
+            color = ACCENT if rank == 1 else (170, 170, 170)
+            cv2.putText(frame, f"{rank}. {waza}", (x_text, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, fs * 1.1, color, th,
+                        cv2.LINE_AA)
+            bh = int(row * 0.45)
+            by = y - bh + 2
+            cv2.rectangle(frame, (bar_x, by), (bar_x + bar_w_max, by + bh),
+                          BAR_BG, -1)
+            cv2.rectangle(frame, (bar_x, by),
+                          (bar_x + int(bar_w_max * p), by + bh), color, -1)
+            cv2.putText(frame, f"{p:.0%}",
+                        (bar_x + bar_w_max + int(w * 0.012), y),
+                        cv2.FONT_HERSHEY_SIMPLEX, fs, color, th, cv2.LINE_AA)
+            y += row
+
+    if refs:
+        cv2.putText(frame, "catalog matches: " + "   ".join(
+            f"{r['waza']} {r['similarity']:.2f}" for r in refs),
+            (x_text, y), cv2.FONT_HERSHEY_SIMPLEX, fs * 0.85,
+            (150, 150, 150), max(1, th - 1), cv2.LINE_AA)
+        y += row
+
+    cv2.putText(frame, "LionOfJudo | pose + power analysis",
+                (x_text, y), cv2.FONT_HERSHEY_SIMPLEX, fs * 0.9,
+                (120, 170, 190), max(1, th - 1), cv2.LINE_AA)
     return frame
 
 
@@ -74,27 +127,25 @@ def main() -> None:
     analysis = analyzer.process_video(blurred)
     annotated = workdir / f"{blurred.stem}_cam0_annotated.mp4"
 
-    # 3. classification for the banner
-    lines = []
+    # 3. classification: top-3 waza with probabilities
+    top3: list[tuple[str, float]] = []
+    refs = None
     poses = analysis.get("poses") or []
     pf = features_from_poses(poses) if poses else None
-    if args.label:
-        lines.append(f"WAZA: {args.label}")
-    elif pf is not None:
+    if pf is not None and not args.label:
         bundle = load_learned_classifier()
         if bundle:
-            res = classify_learned(bundle, pf["stats"])
-            if res:
-                lines.append(f"WAZA: {res['technique']}  "
-                             f"({res['confidence']:.0%})")
+            clf, labels = bundle
+            x = np.nan_to_num(pf["stats"], nan=0.0, posinf=0.0,
+                              neginf=0.0).reshape(1, -1)
+            proba = clf.predict_proba(x)[0]
+            order = np.argsort(proba)[::-1][:3]
+            top3 = [(labels[i], float(proba[i])) for i in order]
         bank = refbank.load_bank()
         if bank:
             refs = refbank.match(bank, pf["stats"], top_k=3)
-            lines.append("nearest: " + "  ".join(
-                f"{r['waza']} {r['similarity']:.2f}" for r in refs))
-    lines.append("LionOfJudo | pose + power analysis")
 
-    # 4. burn the banner in
+    # 4. burn the recognition panel in
     cap = cv2.VideoCapture(str(annotated))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -105,7 +156,7 @@ def main() -> None:
         ok, frame = cap.read()
         if not ok:
             break
-        writer.write(banner(frame, lines))
+        writer.write(draw_panel(frame, top3, refs, args.label))
     cap.release()
     writer.release()
 
@@ -116,8 +167,10 @@ def main() -> None:
     json_stray.unlink(missing_ok=True)
 
     print(f"\n✓ showcase video: {out}")
-    for line in lines:
-        print(f"  banner: {line}")
+    if args.label:
+        print(f"  waza (override): {args.label}")
+    for waza, p in top3:
+        print(f"  {p:5.0%}  {waza}")
 
 
 if __name__ == "__main__":
