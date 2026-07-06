@@ -33,14 +33,23 @@ VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 def load_dataset(dataset_dir: Path, min_per_class: int,
                  exclude: tuple[str, ...] = ("youtube_",)
                  ) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    from pipeline.label_check import build_vocab, check_clip
+
+    vocab = build_vocab(dataset_dir) if dataset_dir.exists() else {}
     X, y, labels = [], [], []
     skipped_classes = []
+    n_suspect = 0
     for d in sorted(dataset_dir.iterdir()):
         if not d.is_dir() or any(d.name.startswith(x) for x in exclude):
             continue
         feats = []
         for clip in sorted(d.iterdir()):
             if clip.suffix.lower() not in VIDEO_EXTS:
+                continue
+            reason = check_clip(clip, vocab)
+            if reason:
+                n_suspect += 1
+                print(f"  EXCLUDED (label suspect): {clip.name} — {reason}")
                 continue
             cache = clip.with_suffix(".npz")
             if cache.exists():
@@ -53,6 +62,9 @@ def load_dataset(dataset_dir: Path, min_per_class: int,
         X.extend(feats)
         y.extend([idx] * len(feats))
 
+    if n_suspect:
+        print(f"  ({n_suspect} clips excluded by filename/folder cross-check "
+              f"— see pipeline/label_check.py)")
     for name, n in skipped_classes:
         print(f"  skipping class '{name}': only {n} extracted samples "
               f"(< {min_per_class})")

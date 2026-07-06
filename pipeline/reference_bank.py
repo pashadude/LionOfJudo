@@ -39,16 +39,34 @@ def waza_category(name: str) -> str:
 
 
 def build_bank(dataset_dir: Path = DATASET_DIR) -> dict:
+    from pipeline.label_check import build_vocab, check_clip
+
+    VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+    vocab = build_vocab(dataset_dir)
     feats, labels = [], []
+    n_stale = n_suspect = 0
     for d in sorted(dataset_dir.iterdir()):
         if not d.is_dir() or d.name.startswith("youtube_"):
             continue
         for npz in sorted(d.glob("*.npz")):
+            # only npz whose source video still exists and isn't mislabeled
+            video = next((npz.with_suffix(e) for e in VIDEO_EXTS
+                          if npz.with_suffix(e).exists()
+                          or npz.with_suffix(e.upper()).exists()), None)
+            if video is None:
+                n_stale += 1
+                continue
+            if check_clip(video, vocab):
+                n_suspect += 1
+                continue
             try:
                 feats.append(np.load(npz)["stats"])
                 labels.append(d.name)
             except Exception:
                 pass
+    if n_stale or n_suspect:
+        print(f"  skipped {n_stale} stale npz (video gone), "
+              f"{n_suspect} label suspects")
     if not feats:
         raise SystemExit("no .npz features found — run "
                          "'python -m pipeline.pose_features dataset/' first")
