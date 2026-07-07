@@ -13,10 +13,11 @@ panel:
 
 | We tried | Why we rejected it |
 |---|---|
-| **Wired sensors** to a Raspberry Pi Pico controller at the mat edge | Wires on a child being thrown are unsafe and unusable — the first design never left paper |
-| **Live WiFi streaming** from the athlete to a router (MikroTik at the dojo) | A 2.4 GHz radio pressed between two bodies on a mat drops packets constantly; battery life collapsed from ~6 h to ~1 h; and live data buys nothing — analysis is post-training anyway |
-| **Ready-made Bluetooth IMUs** (WitMotion-class, ~$30 each) | 6–8× the cost per unit, sealed batteries we can't inspect, opaque firmware, no flash logging |
-| **Phone-in-pocket sensing** (the approach our scientific consultant proved for skiing) | Perfect for skiing; on a tatami a phone is a rock strapped to a child — weight, size, and impact risk are disqualifying |
+| **Fixed 3-camera Raspberry Pi rig with a wired sensor hub** (the original paper design: 3× Pi 4 + Arducams + Pi Pico hub) | $431 of dedicated hardware, an evening of setup per session, and wires that cannot follow a moving athlete — never built |
+| **Cloud processing** (Hetzner servers, in the original plan) | Monthly costs forever, and children's footage leaving the building — replaced by a laptop that processes overnight, fully offline |
+| **Live WiFi streaming** from the athlete to a router (MikroTik at the dojo) | Packets die between two bodies on a mat; ~6× the battery drain; and live data buys nothing — analysis is post-training anyway |
+| **Ready-made Bluetooth IMUs** (WitMotion-class, ~$30 each) | 6–8× the cost per unit, sealed batteries we can't inspect, opaque firmware, Bluetooth sync drift between units |
+| **Phone-in-the-gi sensing** (the approach our scientific consultant conceived and proved for skiing) | Perfect for skiing; wrong for an impact sport — a phone is too big, too heavy, and too expensive to sacrifice on a tatami |
 | **Smaller/cheaper ESP32 boards with 4 MB flash** | Only ~35 minutes of recording — a judo session is 90+ |
 | **Unprotected LiPo cells** (cheapest option) | Never on a child. Protected cells with a cutoff circuit, or LiFePO4 chemistry, only |
 
@@ -72,10 +73,16 @@ front view, with two glowing markers:
    caption: judo falls land on the back and side — the sternum position
    is protected by technique itself, and the crossed lapels add a double
    layer of thick cotton.
-2. **HIP unit — front of the belt, tucked behind the knot**, slightly to
-   one side of it. The belt's four+ layers of dense cotton are the armor.
+2. **HIP unit — under the belt, in a pocket sewn to the judogi itself**
+   (front or back panel of the gi at hip level, close to the body). Not
+   attached to the belt: **the belt rotates and shifts during randori,
+   while the gi panel stays with the body** — a belt-mounted sensor would
+   measure belt slip, not hip rotation. The belt worn over the pocket
+   still acts as armor (four+ layers of dense cotton).
    Caption rationale: the hip is the engine of every throw — this sensor
-   measures the rotation that scores ippons.
+   measures the rotation speed (°/s), hip drive, and kuzushi timing that
+   score ippons.
+   **Draw the marker on the gi beneath the belt line, not on the belt.**
 
 **Never drawn / explicitly wrong:** anything on the spine or lower back
 (direct mat-impact zone), shoulders, or limbs. If an "incorrect placement"
@@ -143,6 +150,7 @@ outer gi / lapel / belt covers everything
 2. **Judoka front view** with the two placement markers and captions
 3. **Pocket cross-section** (the layer stack above)
 4. **Four-panel usage storyboard**
-5. **"What we rejected" strip**: five crossed-out alternatives (wires /
-   streaming radio / $30 BLE puck / phone / small-flash board) → arrow →
-   the final capsule with "$8 · 15 g · 6 h · zero dojo setup"
+5. **"What we rejected" strip**: six crossed-out alternatives (fixed
+   Pi-camera rig with wired hub / cloud servers / streaming radio /
+   $30 BLE puck / phone / small-flash board) → arrow → the final capsule
+   with "$8 · 15 g · 6 h · zero dojo setup"

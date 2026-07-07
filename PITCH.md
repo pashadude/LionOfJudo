@@ -90,12 +90,14 @@ profile, timing — which disambiguates what pixels cannot. That is the
 "cheap AND precise" claim: pose AI for the shape, physics for the truth.
 
 **Business model — for the people first, sustainable second:**
-- **DIY tier (free forever, MIT license):** any parent or trainer with a
-  laptop and $40 of parts builds it from our repository. This is the
-  mission: every kid, every school.
-- **Club kit (paid):** assembled sensors, pre-configured processing
-  station, setup afternoon, support — for clubs that want it working, not
-  a soldering project.
+- **DIY tier — software free forever (MIT license):** a family or school
+  pays only **parts at cost, ~€40 per sensor capsule** (published
+  shopping list and build guide); their own laptop and cameras. This is
+  the mission: every kid, every school.
+- **Club kit — €1,000/year:** the club buys an outcome, not a project:
+  2 dedicated cameras + tripods (~€400, year one), 4 assembled and
+  tested sensor capsules (~€200), managed cloud processing & storage
+  (~€200/yr), setup afternoon + trainer onboarding + support (~€200).
 - **Federation tier (paid, later):** multi-club deployments, athlete
   registries, season analytics, national talent-scouting dashboards —
   priced against the $20k+ lab alternatives they currently can't afford
@@ -125,15 +127,18 @@ recognition models better for everyone.
 
 ---
 
-## The full roadmap — funded once, delivered in stages
+## The full roadmap — funded once, nine months, five stages
 
-**Phase 1 — Instrumented pilot** *(weeks 1–6; starts when parts arrive, ~3 weeks)*
-- Assemble & bench-test wearable sensor units; dress rehearsal at home
-  with Lev (the garage lab continues — that's the story we film)
-- First instrumented sessions at Judo Club Niš with the 2 pilot athletes
-- First reports with **measured throw power** delivered to the trainers
+*(The software is finished and verified; the trainers are committed; the
+timeline starts the day parts arrive.)*
 
-**Phase 2 — Dataset & accuracy sprint** *(weeks 4–12, overlaps)*
+**Phase 1 — Units live + instrumented pilot** *(weeks 1–6)*
+- Weeks 1–2: assemble & bench-test sensor units; garage dress rehearsal
+  with Lev (that's the story we film)
+- Weeks 2–6: instrumented sessions at Judo Club Niš with the 2 pilot
+  athletes; first reports with **measured throw power** to the trainers
+
+**Phase 2 — Dataset & accuracy sprint** *(weeks 4–10, overlaps)*
 - Trainers label competition/training footage with a one-keypress tool
   (no technical skill needed) — five experts labeling their own athletes
   out-produces any internet scraping
@@ -155,7 +160,7 @@ recognition models better for everyone.
   opportunity)
 - Sensor kits for 5+ athletes
 
-**Phase 4 — Ne-waza (ground work) + next-generation model** *(months 5–8)*
+**Phase 4 — Ne-waza (ground work) + next-generation model** *(months 4–7)*
 - Ground-work segmentation and recognition (the 48-hold catalog is already
   in the reference bank; ne-waza needs its own detection logic)
 - Upgrade the classifier to a temporal neural network trained on the
@@ -163,7 +168,7 @@ recognition models better for everyone.
   historically doubles accuracy once a corpus matures
 - Optional vision-LLM assist for rare techniques
 
-**Phase 5 — Beyond one club** *(months 6–12)*
+**Phase 5 — Beyond one club** *(months 5–9)*
 - Packaged replication kit: sensors, mounting, software image, setup guide
   — any club can deploy in an afternoon
 - Pilot #2 at a second Serbian club
@@ -173,29 +178,30 @@ recognition models better for everyone.
 
 ---
 
-## The ask
+## The ask — one number, one time
 
-I am raising **once, for the full 12-month program** — I would rather
-over-deliver than come back mid-season asking twice.
+**Skin in the game first:** I have already funded discovery myself —
+**over $1,000 in parts, equipment and spares, and 300+ hours of my
+professional time**. At my market rate as an AI product executive that
+is **€50,000+ already invested**. The exploration risk is spent and paid
+for. What I'm raising now buys **execution of a proven system**, not
+experiments.
 
-### Full program budget: €25,000
+### €30,000 for the full nine-month program
 
 | Line | € | Covers |
 |---|---|---|
 | Sensor & camera hardware | 2,500 | 10 athlete sensor kits + spares, 2 dedicated cameras + tripods, mounting materials |
-| Club processing station | 1,500 | Mac mini class machine living at the club — overnight processing without my laptop |
-| Development time | 15,000 | 12 months part-time focused work: dashboard, quality scoring, ne-waza, neural model, replication kit |
-| Trainer collaboration | 3,000 | Labeling sessions, filming sessions, competition travel for data collection |
+| Club processing station + cloud storage | 2,000 | Machine living at the club — overnight processing without my laptop; managed storage |
+| Development time | 15,000 | 9 months focused work: dashboard, quality scoring, ne-waza, neural model |
+| Trainer collaboration | 3,500 | Labeling sessions, filming sessions, competition travel for data collection |
 | Second-club rollout + localization | 2,000 | Kit for pilot club #2, Serbian localization, printed materials |
-| Contingency | 1,000 | Broken sensors, reshoots, the unglamorous reality of hardware |
+| Replication-kit productization | 3,000 | Capsule mold, assembly documentation, child-safety testing |
+| Contingency | 2,000 | Broken sensors, reshoots, the unglamorous reality of hardware |
 
-### Sponsorship tiers
-
-| Tier | Amount | What the sponsor gets |
-|---|---|---|
-| **Kit sponsor** | €1,000 | Logo on every showcase video & report the club produces for a year |
-| **Pilot sponsor** | €5,000 | Above + naming on the pilot program + demo event at the club + first access to results |
-| **Program partner** | €25,000 | The full program: partner branding on everything, co-announcement with the club, seat at the federation conversation, and the replication kit carries your name to every future club |
+**The backer's terms:** backing the program now guarantees a **25%
+discount at the pre-seed round when LionOfJudo enters its commercial
+stage**. You are not donating — you are first in line.
 
 The software stays **open source (MIT) and $0/month by design** — every
 euro goes to hardware, people, and time, not licenses or cloud bills.
@@ -242,10 +248,10 @@ Engineering, University of Niš**; speaker at the OECD Global Partnership
 on AI Summit (Serbia, 2024). Pavel's research collaborator at ZENPULSAR
 and co-author — **two joint Springer publications (2024 and 2025)** on
 machine learning over social-media signals for financial markets.
-Directly relevant track record: developed a **phone-based skiing
-accelerometer analysis app** built on a concept Pavel proposed — the
-same IMU-motion-analysis approach LionOfJudo brings to the tatami,
-already proven on the slopes. A University of Niš professor on a Niš
+Directly relevant track record: conceived and developed a **phone-based
+skiing accelerometer analysis app** — his idea, the same
+IMU-motion-analysis approach LionOfJudo brings to the tatami, already
+proven on the slopes. A University of Niš professor on a Niš
 club's pilot also opens the door to student projects and academic
 publication of the pilot's results.
 LinkedIn: [linkedin.com/in/milanzdravkovic](https://www.linkedin.com/in/milanzdravkovic)
