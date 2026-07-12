@@ -105,7 +105,13 @@ static void ledColor(uint8_t r, uint8_t g, uint8_t b) {
 // ---------------------------------------------------------------- battery
 
 static float batteryVolts() {
-  return analogReadMilliVolts(PIN_BATTERY_ADC) / 1000.0f * BATT_DIVIDER;
+  // The 100k/100k divider is intentionally low-drain.  Discard one ADC read
+  // and average the next four; add a 100nF capacitor from GPIO4 to GND in the
+  // physical build so this high-impedance source is stable.
+  analogReadMilliVolts(PIN_BATTERY_ADC);
+  uint32_t totalMv = 0;
+  for (int i = 0; i < 4; i++) totalMv += analogReadMilliVolts(PIN_BATTERY_ADC);
+  return (totalMv / 4.0f) / 1000.0f * BATT_DIVIDER;
 }
 
 // ---------------------------------------------------------------- logging
@@ -295,6 +301,7 @@ void setup() {
   Serial.begin(115200);
   led.begin();
   ledColor(20, 20, 20);
+  analogSetPinAttenuation(PIN_BATTERY_ADC, ADC_11db);
 
   // Partition scheme app3M_fat9M_16MB labels its 9.9MB data partition
   // "ffat"; LittleFS happily formats/mounts it under that label.

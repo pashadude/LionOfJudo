@@ -22,8 +22,9 @@ panel:
 | **Unprotected LiPo cells** (cheapest option) | Never on a child. Protected cells with a cutoff circuit, or LiFePO4 chemistry, only |
 
 **What survived: a $8-per-unit, matchbox-sized, wireless, flash-logging
-capsule with zero infrastructure at the dojo.** Switch it on, train,
-plug it into USB at home — done.
+capsule with zero infrastructure at the dojo.** Switch it on, train, then
+pull logs over the local WiFi after training. The LiPo is charged separately
+with an external charger — not through the capsule.
 
 ---
 
@@ -36,29 +37,35 @@ One athlete wears **two identical units** (chest + hip). Each unit:
 | 1 | **ESP32-S3 SuperMini** board | 22 × 18 × 4 mm | Matte-black PCB, silver postage-stamp WiFi antenna area at one end, USB-C port on the edge, tiny onboard RGB LED |
 | 2 | **MPU-6050 motion sensor** (GY-521 board) | 21 × 16 × 3 mm | Deep-blue PCB, small square black IC in the center, one row of gold pin holes |
 | 3 | **Battery: protected LiPo 502030, 250 mAh** | 30 × 20 × 5 mm | Flat silver foil pouch, thin red+black wire pair, small white JST-PH plug |
-| 4 | **TP4056 USB-C charging board** | 26 × 17.5 × 4 mm | Blue PCB, USB-C on the short edge, two tiny LEDs (red = charging, blue/green = full) |
+| 4 | **TP4056 USB-C charging board** | 26 × 17.5 × 4 mm | External charger only; it is not inside the capsule. Its charge current must be reduced from a generic 1 A setting to the cell's rated limit. |
 | 5 | **Mini slide switch** | 12 × 6 × 5 mm | Black with silver toggle, mounted flush at the capsule's rim |
 | 6 | Silicone wiring (30 AWG) + heat-shrink | — | Short flexible red/black/yellow/green leads, ~30 mm |
 
-**Assembled electronics stack:** boards sandwiched face-to-face with the
-battery flat underneath → **~45 × 22 × 12 mm, ≈15 g** (lighter than a AA
-battery).
+**Candidate internal layout:** one protected LiPo, ESP32-S3, and GY-521 in a
+dry-fit rectangular enclosure. The IMU PCB is flat and rigidly fixed to the
+case floor; the LiPo is electrically isolated from solder joints and lightly
+cushioned. Do not draw a soft silicone-suspended IMU or a TP4056 inside.
 
 ### The capsule (the hero object)
 
-- **Rigid polypropylene pill-capsule**, cylinder with rounded ends:
-  **~50 mm long × 26 mm diameter**, twist-open in the middle
-- Interior fully lined with **2 mm translucent silicone sheet**; the stack
-  is wrapped so nothing rattles (a loose sensor smears the measurements —
-  snugness is functional, not cosmetic)
-- Two **25 mm silicone discs** cushion the ends
-- Exterior: smooth, matte; one **8 mm hole** for the slide switch, one
-  **light-pipe dot** where the LED shines through
+- **Rigid rectangular polypropylene enclosure**, candidate outer dimensions
+  **64 × 44 × 20 mm**. This is a provisional fit: draw it only as a clear
+  rectangular box until a real dry-fit confirms the internal clearance.
+- The 3 mm tattoo-silicone sheet is a separately visible **body-facing impact
+  spreader pad** in the pocket. Inside the box, use small silicone pieces only
+  at the battery/cover and loose-component interfaces; the GY-521 must be
+  rigidly attached to the case.
+- Exterior: smooth; one correctly sized cutout for the slide switch and one
+  light-pipe dot where the onboard LED shines through. There is no USB-C
+  cutout in v1 because the charger remains external.
 - Brand mark: small lion-head silhouette + "LionOfJudo" in the brand gold
 
-**Wiring for the exploded view:** battery → JST plug → slide switch →
-TP4056 (charging tap) → ESP32 power; four thin leads ESP32↔MPU-6050
-(3V3, GND, SDA→GPIO8, SCL→GPIO9); everything folds into the capsule.
+**Wiring for the exploded view:** one protected battery → JST plug → slide
+switch → ESP32 `5V/VIN/VBUS`; battery - → common GND. The TP4056 is shown
+outside the capsule and connects to the unplugged battery only for charging.
+Four short leads go ESP32↔MPU-6050 (`3V3`, `GND`, `SDA→GPIO8`,
+`SCL→GPIO9`). A 100k/100k divider from battery + to GPIO4 plus a 100 nF
+capacitor from GPIO4 to GND is part of the battery-monitor drawing.
 
 ---
 
@@ -95,9 +102,9 @@ A sewn-in pocket on the gi's inner side at each position,
 
 ```
 child's body
-  │  3 mm silicone pad (60 × 40 mm) — impact spreader
-  │  capsule (lying horizontally)
   │  gi fabric pocket wall
+  │  3 mm tattoo-silicone pad (about 60 × 40 mm) — impact spreader
+  │  rigid capsule (lying horizontally)
   │  velcro flap closure
 outer gi / lapel / belt covers everything
 ```
@@ -108,7 +115,7 @@ outer gi / lapel / belt covers everything
 
 | LED | Meaning | Scene to draw |
 |---|---|---|
-| Slow **green** blink | At home, on WiFi, ready to download | Capsule on a desk beside a laptop, USB-C plugged |
+| Slow **green** blink | On JudoNet WiFi, ready to download | Capsule on a desk beside the Pi/Mac, battery connected |
 | **Amber** countdown blink | 10 s until recording starts | Athlete's hand switching the unit on in a gym bag |
 | Dim green heartbeat + **blue flash on impact** | Recording; blue = a throw just registered | Mid-throw action shot, tiny blue glow at the chest |
 | **Purple** blink | Sensor fault (check wiring) | Bench/repair context only |
@@ -118,16 +125,17 @@ outer gi / lapel / belt covers everything
 
 ## Usage sequence (four-panel storyboard)
 
-1. **Home, evening:** two capsules charging on USB-C, green LEDs, laptop
-   in background showing the analysis dashboard.
-2. **Dojo:** parent slips capsules into the gi pockets; kid does the
-   3-jump sync ritual in front of a small camera tripod. No cables, no
-   equipment on the mat.
+1. **Home, evening:** two disconnected batteries charging in external
+   protective bags with external TP4056 chargers; capsules and laptop are
+   nearby for later log download.
+2. **Dojo:** parent slips capsules into the gi pockets; after the logging
+   countdown and 5 seconds still, athlete does the 3-event physical sync
+   ritual in front of both cameras. No cables, no equipment on the mat.
 3. **Training:** normal randori; a faint blue flash at the chest as a
    throw lands. Nobody is holding a phone; nothing distracts.
-4. **Home, night:** capsules back on USB, MacBook processing; morning
-   report on screen: throw clips, technique names with probability bars
-   (gold), g-force numbers.
+4. **Home, night:** capsules power on beside the Pi while it pulls logs;
+   MacBook processes the copied session. Morning report shows throw clips,
+   technique names with probability bars (gold), and inertial indices.
 
 ---
 

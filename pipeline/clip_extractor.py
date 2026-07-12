@@ -45,3 +45,28 @@ def probe_duration(video: Path) -> float:
            "-of", "default=nw=1:nk=1", str(video)]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True)
     return float(out.stdout.strip())
+
+
+def probe_fps(video: Path) -> float:
+    """Primary video stream frame rate as frames per second."""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+        "-of", "default=nw=1:nk=1", str(video),
+    ]
+    out = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    for line in out.stdout.splitlines():
+        fps = _parse_rate(line.strip())
+        if fps > 0:
+            return fps
+    raise ValueError(f"could not determine FPS for {video}")
+
+
+def _parse_rate(rate: str) -> float:
+    if not rate or rate == "0/0":
+        return 0.0
+    if "/" in rate:
+        num, den = rate.split("/", 1)
+        den_f = float(den)
+        return float(num) / den_f if den_f else 0.0
+    return float(rate)

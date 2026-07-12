@@ -34,6 +34,8 @@ class ImuLog:
     t_s: np.ndarray        # seconds since unit boot (from millis)
     accel_g: np.ndarray    # (N,3) in g
     gyro_dps: np.ndarray   # (N,3) in deg/s
+    accel_saturated: bool = False
+    gyro_saturated: bool = False
     total_g: np.ndarray = field(init=False)
     gyro_mag: np.ndarray = field(init=False)
 
@@ -87,13 +89,54 @@ def load_imu_log(path: Path) -> ImuLog:
         ("g", "<i2", (3,)),
     ]))
 
+    raw_accel = rec["a"].astype(np.int32)
+    raw_gyro = rec["g"].astype(np.int32)
+    # Leave margin for one-LSB conversion differences.  A railed signal is
+    # useful for throw timing, but its peak magnitude is no longer trustworthy.
+    saturation_raw = 32760
+
     return ImuLog(
         unit=UNIT_NAMES.get(unit_id, f"unit{unit_id}"),
         sample_rate_hz=rate,
         t_s=rec["millis"].astype(np.float64) / 1000.0,
         accel_g=rec["a"].astype(np.float64) / accel_scale,
         gyro_dps=rec["g"].astype(np.float64) / gyro_scale,
+        accel_saturated=bool(np.any(np.abs(raw_accel) >= saturation_raw)),
+        gyro_saturated=bool(np.any(np.abs(raw_gyro) >= saturation_raw)),
     )
+
+
+def log_quality(log: ImuLog, static_window_s: float = 5.0) -> dict[str, float | int | bool]:
+    """Return field-test diagnostics without changing the measured signals.
+
+    The first few logged seconds should be still under the v1 operating
+    protocol.  These values expose wiring, mounting, timing, and range issues
+    before video inference is allowed to make a coaching claim.
+    """
+    t = np.asarray(log.t_s, dtype=np.float64)
+    dt_ms = np.diff(t) * 1000.0
+    expected_dt_ms = 1000.0 / log.sample_rate_hz if log.sample_rate_hz else np.nan
+    valid_dt = dt_ms[dt_ms > 0]
+    first = (t - t[0]) <= static_window_s if t.size else np.zeros(0, dtype=bool)
+
+    return {
+        "samples": int(t.size),
+        "duration_s": float(t[-1] - t[0]) if t.size > 1 else 0.0,
+        "sample_rate_hz": int(log.sample_rate_hz),
+        "expected_dt_ms": float(expected_dt_ms),
+        "median_dt_ms": float(np.median(valid_dt)) if valid_dt.size else np.nan,
+        "max_dt_ms": float(np.max(dt_ms)) if dt_ms.size else np.nan,
+        "late_intervals": int(np.sum(dt_ms > expected_dt_ms * 1.5))
+        if np.isfinite(expected_dt_ms) else 0,
+        "accelerometer_saturated": bool(log.accel_saturated),
+        "gyro_saturated": bool(log.gyro_saturated),
+        "initial_total_g_mean": float(np.mean(log.total_g[first]))
+        if first.any() else np.nan,
+        "initial_total_g_std": float(np.std(log.total_g[first]))
+        if first.any() else np.nan,
+        "initial_gyro_mag_median_dps": float(np.median(log.gyro_mag[first]))
+        if first.any() else np.nan,
+    }
 
 
 def detect_spikes(log: ImuLog, threshold_g: float = 3.0,

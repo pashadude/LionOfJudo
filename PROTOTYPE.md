@@ -7,11 +7,11 @@ Replaces the 3×Raspberry-Pi rig described in HARDWARE_SETUP.md.
 DOJO (zero infrastructure)                 HOME (MacBook M2)
 ──────────────────────────                 ─────────────────────────
 Sony X3000 on tripod  ─┐                   1. Copy both video files
-iPhone on tripod      ─┼─ record normally  2. Plug sensors into USB →
-2 IMU units in gi     ─┘                      python tools/fetch_imu.py
+iPhone on tripod      ─┼─ record normally  2. Pi pulls IMU logs on JudoNet →
+2 IMU units in gi     ─┘                      Mac copies session folder
                                            3. python -m pipeline.run_session
-Son does 3 jumps at start,                 4. Pick your athlete: 1 keypress
-3 claps at the end (sync ritual)              per clip, then walk away
+Son does 3 physical spikes at start/end,   4. Pick your athlete: 1 keypress
+not ordinary off-body claps                   per clip, then walk away
                                            5. Read session_report.md
 ```
 
@@ -21,12 +21,13 @@ Son does 3 jumps at start,                 4. Pick your athlete: 1 keypress
 |---|---|
 | ESP32-S3 SuperMini | **must be 16 MB flash (N16R8)** — 4 MB fits only ~35 min |
 | MPU-6050 (GY-521) | 4 wires to ESP32: 3V3, GND, SDA→GPIO8, SCL→GPIO9 |
-| Protected LiPo 502030 250 mAh | via mini slide switch; TP4056 USB-C board for charging |
-| Rigid pill capsule ~50×25 mm | lined with 2 mm silicone sheet; unit must not rattle |
+| Protected LiPo 502030 250 mAh | via mini slide switch; disconnect and charge with an external TP4056 only |
+| Rigid rectangular case 64×44×20 mm | 3 mm silicone pad belongs on the body-facing pocket side; unit must not rattle |
 
-Battery ADC: 100k/100k divider from cell + to GPIO4 (low-batt cutoff closes
-the log file cleanly). Safer chemistry option: 10440 LiFePO4 (AAA size, no
-thermal runaway) fed to the 3V3 pin.
+Battery ADC: 100k/100k divider from cell + to GPIO4 with a 100 nF capacitor
+from GPIO4 to GND (low-batt cutoff closes the log file cleanly). Never feed a
+LiPo or LiFePO4 cell directly to the ESP32 `3V3` pin. A LiFePO4 alternative
+needs its own compatible charger and a correctly designed 3.3 V power stage.
 
 **Placement:** chest capsule on the sternum under the crossed lapels; hip
 capsule at the FRONT of the belt behind the knot. Never on the spine.
@@ -49,12 +50,19 @@ or battery problem.
 
 ## Session workflow
 
-1. **At the dojo:** switch both units on, start both cameras. Son does
-   **3 sharp jumps** in front of the cameras (must be audible — landing slap
-   or a parent clap on each jump). Train normally. **3 claps** at the end.
-2. **At home:** plug units into USB (charges + enables WiFi download):
+1. **At the dojo:** switch both units on, wait until the amber countdown has
+   finished, then hold still for 5 seconds. Do **3 deliberate heel-drops or
+   mounted-unit taps** in front of the cameras. Every event must be audible
+   and create a physical spike in both wearables. Train normally. End with the
+   same physical three-spike ritual, then leave 10 seconds still.
+2. **After training:** power the units off. Turn on JudoNet/Pi, power the
+   units back on so they enter download mode, and collect:
    ```bash
-   python tools/fetch_imu.py --out sessions/$(date +%F)/imu/ --wipe
+   python tools/rpi_collect_imu.py --root /data/lionofjudo --session $(date +%F)
+   ```
+   Before video processing, check the raw data:
+   ```bash
+   python tools/imu_preflight.py sessions/2026-07-05/imu/
    ```
 3. **Run the pipeline** (overnight for a long session):
    ```bash

@@ -10,13 +10,14 @@ Steps:
  1. Audio cross-correlation      -> master (Sony) timeline
  2. IMU ritual detection          -> per-unit clock maps
  3. IMU spike segmentation        -> throw windows
- 4. ffmpeg clip cutting           -> 2 raw clips per throw
- 5. Interactive athlete pick      -> one keypress per clip (only human step)
- 6. Face blur (all except son)    -> blurred clips
- 7. Existing VisualJudoAnalyzer   -> skeleton overlay + pose JSON
- 8. Existing classify_technique   -> technique guess + reasoning
- 9. Existing MovementAnalyzer     -> movement narrative
-10. session_report.md / .json
+ 4. Gi biomechanics resampling    -> chest/hip IMU on Sony video frames
+ 5. ffmpeg clip cutting           -> 2 raw clips per throw
+ 6. Interactive athlete pick      -> one keypress per clip (only human step)
+ 7. Face blur (all except son)    -> blurred clips
+ 8. Existing VisualJudoAnalyzer   -> skeleton overlay + pose JSON
+ 9. Existing classify_technique   -> technique guess + reasoning
+10. Existing MovementAnalyzer     -> movement narrative
+11. session_report.md / .json
 """
 
 import argparse
@@ -30,8 +31,8 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline import audio_sync, imu_ingest
-from pipeline.clip_extractor import cut_clip, probe_duration
+from pipeline import audio_sync, gi_biomechanics, imu_ingest
+from pipeline.clip_extractor import cut_clip, probe_duration, probe_fps
 from pipeline.face_blur import blur_clip, first_frame_boxes, pick_person_frame
 from pipeline.throw_segmenter import ThrowWindow, segment_throws
 
@@ -158,6 +159,8 @@ def main() -> None:
     p.add_argument("--device", default="mps")
     p.add_argument("--scale-height", type=int, default=1080,
                    help="downscale clips for inference (0 = keep 4K)")
+    p.add_argument("--write-session-gi-biomechanics", action="store_true",
+                   help="also write one full-session frame-aligned IMU CSV")
     p.add_argument("--blur-all", action="store_true",
                    help="skip picking; blur every face including the athlete")
     p.add_argument("--no-blur", action="store_true",
@@ -187,8 +190,20 @@ def main() -> None:
         raise SystemExit(f"ERROR: no chest*.bin / hip*.bin logs in {args.imu}")
     logs = {u: imu_ingest.load_imu_log(p) for u, p in log_paths.items()}
     for u, l in logs.items():
+        if l.unit != u:
+            raise SystemExit(
+                f"ERROR: {log_paths[u].name} is named '{u}' but its LJIM "
+                f"header says '{l.unit}'. Reflash the units with unique "
+                "UNIT_ID/UNIT_NAME values, then collect again.")
+        quality = imu_ingest.log_quality(l)
         log(f"{u}: {len(l.t_s)} samples @ {l.sample_rate_hz}Hz "
             f"({l.t_s[-1] - l.t_s[0]:.0f}s) from {log_paths[u].name}")
+        if quality["accelerometer_saturated"] or quality["gyro_saturated"]:
+            log(f"WARNING: {u} hit a sensor range limit; peak magnitude is "
+                "clipped and must not be treated as a physical maximum")
+        if quality["late_intervals"]:
+            log(f"WARNING: {u} has {quality['late_intervals']} timestamp "
+                "gaps larger than 1.5 sample periods")
 
     clock_maps, ritual_master = build_clock_maps(logs, args.sony,
                                                  args.threshold_g)
@@ -203,6 +218,16 @@ def main() -> None:
     log(f"{len(windows)} throw(s) detected")
 
     sony_duration = probe_duration(args.sony)
+    sony_fps = probe_fps(args.sony)
+    log(f"Sony master timeline: {sony_duration:.1f}s @ {sony_fps:.3f}fps")
+
+    session_gi_csv = None
+    if args.write_session_gi_biomechanics:
+        session_rows = gi_biomechanics.build_frame_rows(
+            logs, clock_maps, 0.0, sony_duration, sony_fps)
+        session_gi_csv = out_dir / "gi_biomechanics_session.csv"
+        gi_biomechanics.write_csv(session_rows, session_gi_csv)
+        log(f"session gi biomechanics: {session_gi_csv}")
 
     # -- 4. cut raw clips ---------------------------------------------------
     scale = args.scale_height or None
@@ -215,15 +240,25 @@ def main() -> None:
         sony_clip = cut_clip(args.sony, w.t_start,
                              min(w.t_end, sony_duration),
                              tdir / "sony_raw.mp4", scale)
+        gi_rows = gi_biomechanics.build_frame_rows(
+            logs, clock_maps, w.t_start, min(w.t_end, sony_duration),
+            sony_fps)
+        gi_csv = tdir / "gi_biomechanics.csv"
+        gi_biomechanics.write_csv(gi_rows, gi_csv)
+        gi_summary = gi_biomechanics.summarize_rows(gi_rows)
+
         iphone_clip = None
         if args.iphone:
             i0, i1 = w.t_start - offset_s, w.t_end - offset_s
             if i1 > 0:
                 iphone_clip = cut_clip(args.iphone, max(0.0, i0), i1,
                                        tdir / "iphone_raw.mp4", scale)
+        w.gi_biomechanics_csv = gi_csv
+        w.gi_biomechanics_summary = gi_summary
         clips.append((w, sony_clip, iphone_clip))
         log(f"throw {w.throw_id}: clips cut "
-            f"[{w.t_start:.1f}s..{w.t_end:.1f}s]")
+            f"[{w.t_start:.1f}s..{w.t_end:.1f}s], gi CSV "
+            f"{len(gi_rows)} frames")
 
     # -- 5..9: heavy phase --------------------------------------------------
     from ultralytics import YOLO
@@ -267,9 +302,17 @@ def main() -> None:
     # retargeted per throw before each process_video call.
     visual = VisualJudoAnalyzer(output_dir=throws_dir)
 
-    report: dict = {"session": str(out_dir), "sony": str(args.sony),
-                    "iphone": str(args.iphone) if args.iphone else None,
-                    "audio_offset_s": offset_s, "throws": []}
+    report: dict = {
+        "session": str(out_dir),
+        "sony": str(args.sony),
+        "sony_fps": sony_fps,
+        "iphone": str(args.iphone) if args.iphone else None,
+        "audio_offset_s": offset_s,
+        "imu_quality": {u: imu_ingest.log_quality(l) for u, l in logs.items()},
+        "session_gi_biomechanics_csv": session_gi_csv.name
+        if session_gi_csv else None,
+        "throws": [],
+    }
 
     for w, sony_clip, iphone_clip in clips:
         tdir = sony_clip.parent
@@ -278,6 +321,10 @@ def main() -> None:
             "t_peak_s": round(w.t_peak, 2),
             "window_s": [round(w.t_start, 2), round(w.t_end, 2)],
             "power": {u: asdict(m) for u, m in w.metrics.items()},
+            "gi_biomechanics": {
+                "csv": getattr(w, "gi_biomechanics_csv").name,
+                "summary": getattr(w, "gi_biomechanics_summary"),
+            },
             "videos": {},
         }
 
@@ -352,10 +399,14 @@ def main() -> None:
 
 def write_markdown_report(report: dict, path: Path) -> None:
     lines = [f"# Training Session Report", "",
-             f"- Sony: `{report['sony']}`"]
+             f"- Sony: `{report['sony']}` "
+             f"({report.get('sony_fps', 0):.3f} fps master timeline)"]
     if report["iphone"]:
         lines.append(f"- iPhone: `{report['iphone']}` "
                      f"(offset {report['audio_offset_s']:+.3f}s)")
+    if report.get("session_gi_biomechanics_csv"):
+        lines.append(f"- Session gi biomechanics: "
+                     f"`{report['session_gi_biomechanics_csv']}`")
     lines += ["", f"## {len(report['throws'])} Throws", ""]
 
     for t in report["throws"]:
@@ -383,6 +434,19 @@ def write_markdown_report(report: dict, path: Path) -> None:
                 f"rotation {pm['max_rotation_dps']:.0f}°/s, "
                 f"duration {pm['duration_ms']:.0f}ms, "
                 f"power index {pm['power_index']:.2f}")
+        gi = t.get("gi_biomechanics") or {}
+        if gi:
+            s = gi.get("summary", {})
+            lines.append(f"- **Gi biomechanics:** "
+                         f"[frame CSV](throws/throw_{t['throw_id']:02d}/"
+                         f"{gi['csv']})")
+            if s:
+                lines.append(
+                    f"  - combined peak {s.get('combined_peak_g', 0):.1f}g, "
+                    f"hip rotation {s.get('hip_peak_rotation_dps', 0):.0f}°/s, "
+                    f"hip rotation lead "
+                    f"{s.get('hip_rotation_lead_ms', 0):+.0f}ms, "
+                    f"coupling {s.get('mean_rotation_coupling', 0):+.2f}")
         for name, v in t.get("videos", {}).items():
             lines.append(f"- {name}: [{v['annotated']}](throws/"
                          f"throw_{t['throw_id']:02d}/{v['annotated']}) "
