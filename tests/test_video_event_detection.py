@@ -1,0 +1,98 @@
+import unittest
+
+import numpy as np
+
+from pipeline.video_event_detection import (
+    EventMetrics,
+    bbox_iou,
+    recover_blue_pose,
+    select_blue_detection,
+    suggest_event_windows,
+)
+
+
+class EventDetectionTests(unittest.TestCase):
+    def test_merges_adjacent_motion_samples_into_one_window(self):
+        windows = suggest_event_windows(
+            [0.0, 0.1, 0.9, 1.1, 0.0], fps=10.0, threshold=0.5
+        )
+
+        self.assertEqual(windows, [(0.1, 0.4)])
+
+    def test_expands_merges_and_clips_windows_at_injury_cutoff(self):
+        windows = suggest_event_windows(
+            [0.8, 0.0, 0.0, 0.8, 0.8, 0.0, 0.8],
+            fps=1.0,
+            threshold=0.5,
+            expansion_s=1.0,
+            merge_gap_s=1.5,
+            injury_cutoff_s=4.5,
+        )
+
+        self.assertEqual(windows, [(0.0, 4.5)])
+
+    def test_expansion_adds_one_second_on_both_sides(self):
+        windows = suggest_event_windows(
+            [0.0, 1.0, 0.0], fps=1.0, threshold=0.5, expansion_s=1.0
+        )
+
+        self.assertEqual(windows, [(0.0, 3.0)])
+
+    def test_injury_event_is_separate_and_excluded(self):
+        events = EventMetrics.from_windows(
+            [(0.0, 2.0)], injury_cutoff_s=2.0, injury_window=(2.0, 3.0)
+        )
+
+        self.assertEqual(len(events), 2)
+        self.assertFalse(events[0].iskljuceno_iz_statistike)
+        self.assertTrue(events[1].iskljuceno_iz_statistike)
+        self.assertEqual(events[1].status, "povreda")
+
+    def test_rejects_invalid_fps(self):
+        with self.assertRaises(ValueError):
+            suggest_event_windows([1.0], fps=-1.0, threshold=0.5)
+
+    def test_seed_selects_largest_iou_and_preserves_track_id(self):
+        detections = [
+            {"bbox": (0, 0, 20, 20), "track_id": 7},
+            {"bbox": (8, 8, 28, 28), "track_id": 11},
+        ]
+
+        selected = select_blue_detection(detections, (6, 6, 25, 25))
+
+        self.assertEqual(selected["track_id"], 11)
+        self.assertGreater(bbox_iou(selected["bbox"], (6, 6, 25, 25)), 0.5)
+
+    def test_recovery_requires_blue_dominant_torso_patch(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame[20:80, 20:60] = (255, 0, 0)
+        candidates = [
+            {"bbox": (20, 20, 60, 80), "track_id": 12},
+            {"bbox": (65, 20, 95, 80), "track_id": 13},
+        ]
+
+        recovered = recover_blue_pose(
+            candidates,
+            previous_bbox=(20, 20, 60, 80),
+            frame=frame,
+            previous_track_id=7,
+        )
+
+        self.assertEqual(recovered["track_id"], 12)
+
+    def test_recovery_without_compatible_blue_pose_is_not_visible(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame[20:80, 20:60] = (0, 255, 0)
+
+        recovered = recover_blue_pose(
+            [{"bbox": (20, 20, 60, 80), "track_id": 12}],
+            previous_bbox=(20, 20, 60, 80),
+            frame=frame,
+            previous_track_id=7,
+        )
+
+        self.assertIsNone(recovered)
+
+
+if __name__ == "__main__":
+    unittest.main()
