@@ -1,5 +1,27 @@
 from dataclasses import dataclass
+import math
 from typing import Any
+
+
+def _finite_float(value: object, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{field_name} must be a JSON number")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ValueError(f"{field_name} must be finite")
+    return normalized
+
+
+def _string(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a JSON string")
+    return value
+
+
+def _boolean(value: object, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"{field_name} must be a JSON boolean")
+    return value
 
 
 @dataclass(frozen=True)
@@ -7,12 +29,30 @@ class AnchorPair:
     name: str
     sony_s: float
     iphone_s: float
+    user_confirmed: bool = False
+    triple_tap_count: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _string(self.name, "name"))
+        object.__setattr__(self, "sony_s", _finite_float(self.sony_s, "sony_s"))
+        object.__setattr__(self, "iphone_s", _finite_float(self.iphone_s, "iphone_s"))
+        object.__setattr__(self, "user_confirmed", _boolean(self.user_confirmed, "user_confirmed"))
+        if isinstance(self.triple_tap_count, bool) or not isinstance(self.triple_tap_count, int):
+            raise TypeError("triple_tap_count must be a JSON integer")
+        if self.triple_tap_count < 0:
+            raise ValueError("triple_tap_count must not be negative")
+
+    @property
+    def is_confirmed(self) -> bool:
+        return self.user_confirmed and self.triple_tap_count == 3
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "sony_s": self.sony_s,
             "iphone_s": self.iphone_s,
+            "user_confirmed": self.user_confirmed,
+            "triple_tap_count": self.triple_tap_count,
         }
 
     @classmethod
@@ -33,6 +73,15 @@ class ReviewEvent:
     iskljuceno_iz_statistike: bool = False
 
     def __post_init__(self) -> None:
+        self.event_id = _string(self.event_id, "event_id")
+        self.sony_start_s = _finite_float(self.sony_start_s, "sony_start_s")
+        self.sony_end_s = _finite_float(self.sony_end_s, "sony_end_s")
+        self.prijavljen_povredni_dogadjaj = _boolean(
+            self.prijavljen_povredni_dogadjaj, "prijavljen_povredni_dogadjaj"
+        )
+        self.iskljuceno_iz_statistike = _boolean(
+            self.iskljuceno_iz_statistike, "iskljuceno_iz_statistike"
+        )
         if self.sony_end_s <= self.sony_start_s:
             raise ValueError("event end must be after start")
         if self.prijavljen_povredni_dogadjaj:
@@ -66,6 +115,16 @@ class ReviewSession:
     anchors: list[AnchorPair]
     injury_cutoff_s: float
     events: list[ReviewEvent]
+
+    def __post_init__(self) -> None:
+        self.session_id = _string(self.session_id, "session_id")
+        self.sony_video = _string(self.sony_video, "sony_video")
+        self.iphone_video = _string(self.iphone_video, "iphone_video")
+        if not isinstance(self.anchors, list) or not all(isinstance(anchor, AnchorPair) for anchor in self.anchors):
+            raise TypeError("anchors must be a JSON list of AnchorPair values")
+        self.injury_cutoff_s = _finite_float(self.injury_cutoff_s, "injury_cutoff_s")
+        if not isinstance(self.events, list) or not all(isinstance(event, ReviewEvent) for event in self.events):
+            raise TypeError("events must be a JSON list of ReviewEvent values")
 
     def normal_events(self) -> list[ReviewEvent]:
         return [event for event in self.events if not event.iskljuceno_iz_statistike]

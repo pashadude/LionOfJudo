@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 from typing import Any, Sequence
 
 from pipeline.video_review_contract import AnchorPair
@@ -8,6 +9,18 @@ from pipeline.video_review_contract import AnchorPair
 class TimeMap:
     slope: float
     intercept: float
+
+    def __post_init__(self) -> None:
+        if isinstance(self.slope, bool) or not isinstance(self.slope, (int, float)):
+            raise TypeError("slope must be a JSON number")
+        if isinstance(self.intercept, bool) or not isinstance(self.intercept, (int, float)):
+            raise TypeError("intercept must be a JSON number")
+        normalized_slope = float(self.slope)
+        normalized_intercept = float(self.intercept)
+        if not math.isfinite(normalized_slope) or not math.isfinite(normalized_intercept):
+            raise ValueError("time-map values must be finite")
+        object.__setattr__(self, "slope", normalized_slope)
+        object.__setattr__(self, "intercept", normalized_intercept)
 
     def to_dict(self) -> dict[str, Any]:
         return {"slope": self.slope, "intercept": self.intercept}
@@ -20,6 +33,8 @@ class TimeMap:
 def fit_time_map(anchors: Sequence[AnchorPair]) -> TimeMap:
     if len(anchors) != 2:
         raise ValueError("exactly two confirmed anchors are required")
+    if not all(anchor.is_confirmed for anchor in anchors):
+        raise ValueError("all anchors must have user-confirmed triple-tap evidence")
     first, second = sorted(anchors, key=lambda item: item.iphone_s)
     iphone_delta = second.iphone_s - first.iphone_s
     sony_delta = second.sony_s - first.sony_s

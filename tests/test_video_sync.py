@@ -1,4 +1,6 @@
 import json
+from decimal import Decimal
+from pathlib import Path
 import unittest
 
 from pipeline.video_review_contract import AnchorPair, ReviewEvent, ReviewSession, validate_review_session
@@ -8,8 +10,8 @@ from pipeline.video_sync import TimeMap, fit_time_map, map_iphone_to_sony
 class VideoSyncTests(unittest.TestCase):
     def test_two_anchors_create_affine_iphone_to_sony_mapping(self):
         anchors = [
-            AnchorPair("pocetak", sony_s=10.0, iphone_s=30.0),
-            AnchorPair("kontrola", sony_s=110.4, iphone_s=130.0),
+            AnchorPair("pocetak", sony_s=10.0, iphone_s=30.0, user_confirmed=True, triple_tap_count=3),
+            AnchorPair("kontrola", sony_s=110.4, iphone_s=130.0, user_confirmed=True, triple_tap_count=3),
         ]
         time_map = fit_time_map(anchors)
         self.assertAlmostEqual(map_iphone_to_sony(80.0, time_map), 60.2, places=6)
@@ -17,8 +19,15 @@ class VideoSyncTests(unittest.TestCase):
     def test_rejects_duplicate_or_reversed_anchor_times(self):
         with self.assertRaises(ValueError):
             fit_time_map([
-                AnchorPair("pocetak", 10.0, 30.0),
-                AnchorPair("kontrola", 10.0, 130.0),
+                AnchorPair("pocetak", 10.0, 30.0, user_confirmed=True, triple_tap_count=3),
+                AnchorPair("kontrola", 10.0, 130.0, user_confirmed=True, triple_tap_count=3),
+            ])
+
+    def test_rejects_unconfirmed_anchor_before_mapping(self):
+        with self.assertRaises(ValueError):
+            fit_time_map([
+                AnchorPair("pocetak", 10.0, 30.0, user_confirmed=True, triple_tap_count=3),
+                AnchorPair("kontrola", 110.0, 130.0),
             ])
 
     def test_injury_event_is_excluded_from_normal_statistics(self):
@@ -26,7 +35,10 @@ class VideoSyncTests(unittest.TestCase):
             session_id="demo",
             sony_video="sony.mp4",
             iphone_video="iphone.mov",
-            anchors=[AnchorPair("pocetak", 10.0, 30.0), AnchorPair("kontrola", 110.0, 130.0)],
+            anchors=[
+                AnchorPair("pocetak", 10.0, 30.0, user_confirmed=True, triple_tap_count=3),
+                AnchorPair("kontrola", 110.0, 130.0, user_confirmed=True, triple_tap_count=3),
+            ],
             injury_cutoff_s=126.0,
             events=[ReviewEvent("e-1", 100.0, 105.0), ReviewEvent("e-2", 124.0, 126.0, prijavljen_povredni_dogadjaj=True)],
         )
@@ -51,8 +63,21 @@ class VideoSyncTests(unittest.TestCase):
         time_map = TimeMap(slope=1.004, intercept=-20.12)
         self.assertEqual(TimeMap.from_dict(json.loads(json.dumps(time_map.to_dict()))), time_map)
 
+    def test_rejects_non_json_scalar_values_and_non_finite_timestamps(self):
+        with self.assertRaises(TypeError):
+            AnchorPair(Path("pocetak"), 10.0, 30.0)
+        with self.assertRaises(TypeError):
+            ReviewEvent("e-1", Decimal("1.0"), 2.0)
+        with self.assertRaises(ValueError):
+            ReviewEvent("e-1", float("nan"), 2.0)
+        with self.assertRaises(ValueError):
+            TimeMap(slope=float("inf"), intercept=0.0)
+
     def test_validation_rejects_anchors_outside_source_durations(self):
-        session = self._session(anchors=[AnchorPair("pocetak", 10.0, 30.0), AnchorPair("kontrola", 110.0, 130.0)])
+        session = self._session(anchors=[
+            AnchorPair("pocetak", 10.0, 30.0, user_confirmed=True, triple_tap_count=3),
+            AnchorPair("kontrola", 110.0, 130.0, user_confirmed=True, triple_tap_count=3),
+        ])
         with self.assertRaises(ValueError):
             validate_review_session(session, sony_duration_s=100.0, iphone_duration_s=200.0)
 
@@ -79,7 +104,10 @@ class VideoSyncTests(unittest.TestCase):
             "session_id": "demo",
             "sony_video": "sony.mp4",
             "iphone_video": "iphone.mov",
-            "anchors": [AnchorPair("pocetak", 10.0, 30.0), AnchorPair("kontrola", 110.0, 130.0)],
+            "anchors": [
+                AnchorPair("pocetak", 10.0, 30.0, user_confirmed=True, triple_tap_count=3),
+                AnchorPair("kontrola", 110.0, 130.0, user_confirmed=True, triple_tap_count=3),
+            ],
             "injury_cutoff_s": 126.0,
             "events": [ReviewEvent("e-1", 100.0, 105.0)],
         }
