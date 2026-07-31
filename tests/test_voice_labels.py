@@ -50,7 +50,10 @@ class VoiceLabelSuggestionTests(unittest.TestCase):
         words, warning = transcribe_with_whisper("training.mp4")
 
         self.assertEqual(words, [])
-        self.assertIn("unavailable", warning)
+        self.assertEqual(
+            warning,
+            "Whisper CLI nije dostupan; predlozi tehnika su preskoceni.",
+        )
 
     def test_matches_technique_spoken_as_separate_words(self):
         words = [
@@ -63,6 +66,17 @@ class VoiceLabelSuggestionTests(unittest.TestCase):
 
         self.assertEqual(suggestions["e-1"].predlog_tehnike, "O-soto-gari")
         self.assertEqual(suggestions["e-1"].source_phrase, "o soto gari")
+
+    def test_does_not_join_technique_words_across_a_long_pause(self):
+        words = [
+            TranscriptWord("o", 4.0, 4.1),
+            TranscriptWord("soto", 4.1, 4.2),
+            TranscriptWord("gari", 6.0, 6.1),
+        ]
+
+        suggestions = suggest_techniques(words, [("e-1", 5.0, 8.0)])
+
+        self.assertIsNone(suggestions["e-1"].predlog_tehnike)
 
 
 if __name__ == "__main__":

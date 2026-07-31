@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 
+MAX_PHRASE_GAP_S = 0.75
+
+
 @dataclass(frozen=True)
 class TranscriptWord:
     text: str
@@ -86,7 +89,7 @@ def transcribe_with_whisper(video_path: Path) -> tuple[list[TranscriptWord], str
     video_path = Path(video_path)
     whisper = shutil.which("whisper")
     if whisper is None:
-        return [], "Whisper CLI is unavailable; voice label suggestions were skipped."
+        return [], "Whisper CLI nije dostupan; predlozi tehnika su preskoceni."
 
     with tempfile.TemporaryDirectory(prefix="lion-whisper-") as output_dir:
         subprocess.run(
@@ -105,9 +108,15 @@ def _matching_technique(text: str) -> str | None:
 
 def _vocabulary_matches(words: list[TranscriptWord]) -> list[tuple[TranscriptWord, str]]:
     matches: list[tuple[TranscriptWord, str]] = []
+    words = sorted(words, key=lambda word: word.start_s)
     for start in range(len(words)):
         for width in range(1, min(3, len(words) - start) + 1):
             phrase_words = words[start : start + width]
+            if any(
+                current.start_s - previous.end_s > MAX_PHRASE_GAP_S
+                for previous, current in zip(phrase_words, phrase_words[1:])
+            ):
+                break
             technique = _matching_technique(" ".join(word.text for word in phrase_words))
             if technique is not None:
                 matches.append(
