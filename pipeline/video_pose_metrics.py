@@ -38,6 +38,8 @@ def _keypoints_from_frame(frame: Any) -> np.ndarray:
         array = np.column_stack((array, np.ones(17, dtype=float)))
     if array.ndim != 2 or array.shape[0] < 17 or array.shape[1] < 3:
         raise ValueError("each pose must contain at least 17 keypoints with confidence")
+    if not np.isfinite(array[:17, :3]).all():
+        raise ValueError("pose keypoints and confidences must be finite")
     return array[:17, :3]
 
 
@@ -48,6 +50,24 @@ def _wrap_angle(angle: float) -> float:
 def wrap_angle(angle: float) -> float:
     """Wrap a degree angle to the interval [-180, 180)."""
     return float(_wrap_angle(float(angle)))
+
+
+def json_safe(value: Any) -> Any:
+    """Convert scalar containers to strict-JSON values without NaN/Infinity."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, (np.integer, int)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        numeric = float(value)
+        return numeric if np.isfinite(numeric) else None
+    if isinstance(value, np.ndarray):
+        return [json_safe(item) for item in value.tolist()]
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    return value
 
 
 @dataclass(frozen=True)
@@ -101,7 +121,7 @@ class FrameMetric:
 
     def to_dict(self) -> dict[str, Any]:
         """Return only Python scalar/list values suitable for JSON export."""
-        return {
+        return json_safe({
             "frame_index": self.frame_index,
             "timestamp_s": self.timestamp_s,
             "hip_midpoint": list(self.hip_midpoint) if self.hip_midpoint else None,
@@ -116,7 +136,7 @@ class FrameMetric:
             "brzina_ulaska_norm_s": self.brzina_ulaska_norm_s,
             "rotation_2d_dps": self.rotation_2d_dps,
             "hip_level_norm": self.hip_level_norm,
-        }
+        })
 
 
 def _interpolate(values: list[Any]) -> tuple[list[Any], set[int]]:
@@ -206,9 +226,16 @@ def compute_pose_metrics(
                 visibility[-1] = False
             else:
                 torsos.append(torso)
-                angles.append(float(degrees(atan2(
-                    shoulder[1] - hip[1], shoulder[0] - hip[0]
-                ))))
+                shoulder_vector = (
+                    keypoints[RIGHT_SHOULDER, :2]
+                    - keypoints[LEFT_SHOULDER, :2]
+                )
+                if np.linalg.norm(shoulder_vector) <= 1e-9:
+                    angles.append(None)
+                else:
+                    angles.append(float(degrees(atan2(
+                        shoulder_vector[1], shoulder_vector[0]
+                    ))))
 
         if (keypoints[LEFT_ANKLE, 2] >= KPT_CONFIDENCE
                 and keypoints[RIGHT_ANKLE, 2] >= KPT_CONFIDENCE
@@ -264,4 +291,4 @@ def compute_pose_metrics(
     return metrics
 
 
-__all__ = ["FrameMetric", "compute_pose_metrics", "wrap_angle"]
+__all__ = ["FrameMetric", "compute_pose_metrics", "json_safe", "wrap_angle"]

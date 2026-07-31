@@ -29,9 +29,27 @@ class PoseMetricsTests(unittest.TestCase):
 
         self.assertEqual(metrics[1].brzina_ulaska_norm_s, 5.0)
 
+    def test_rotation_uses_the_shoulder_line_angle(self):
+        frames = [
+            pose(0, 100, (-10, 80), (10, 80)),
+            pose(0, 100, (0, 90), (0, 70)),
+        ]
+
+        metric = compute_pose_metrics(frames, fps=10.0)[1]
+
+        self.assertAlmostEqual(metric.shoulder_angle_deg, -90.0)
+        self.assertAlmostEqual(metric.rotation_2d_dps, -900.0)
+
     def test_rejects_invalid_fps(self):
         with self.assertRaises(ValueError):
             compute_pose_metrics([pose(0, 100, (-5, 80), (5, 80))], fps=0)
+
+    def test_rejects_non_finite_pose_values(self):
+        invalid = pose(0, 100, (-5, 80), (5, 80))
+        invalid[5, 0] = np.nan
+
+        with self.assertRaises(ValueError):
+            compute_pose_metrics([invalid], fps=10.0)
 
     def test_low_visibility_does_not_invent_an_edge_value(self):
         hidden = pose(10, 100, (5, 80), (15, 80))

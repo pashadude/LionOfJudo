@@ -8,7 +8,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
-from .video_pose_metrics import FrameMetric
+from .video_pose_metrics import FrameMetric, json_safe
 
 
 DEFAULT_CONFIDENCE = 0.3
@@ -123,9 +123,9 @@ def recover_blue_pose(
 ) -> Any | None:
     """Recover a post-occlusion pose using proximity and a blue torso cue.
 
-    A candidate must provide an explicit ``blue_dominant`` flag when no image
-    is supplied.  With an image, the flag is measured from its HSV torso patch.
-    Returning ``None`` is the ``nedovoljno_vidljivo`` outcome for the caller.
+    Recovery requires an image so the blue cue is measured from its HSV torso
+    patch. Returning ``None`` is the ``nedovoljno_vidljivo`` outcome for the
+    caller when evidence is unavailable or incompatible.
     """
     previous = _bbox(previous_bbox)
     previous_center = ((previous[0] + previous[2]) / 2.0,
@@ -142,10 +142,9 @@ def recover_blue_pose(
         candidate_size = max(box[2] - box[0], box[3] - box[1])
         if distance > 2.0 * max(previous_size, candidate_size):
             continue
-        if frame is not None:
-            blue = blue_dominant_torso(frame, box, minimum_blue_fraction)
-        else:
-            blue = bool(_candidate_value(candidate, "blue_dominant", False))
+        if frame is None:
+            return None
+        blue = blue_dominant_torso(frame, box, minimum_blue_fraction)
         if blue:
             same_id = _candidate_value(candidate, "track_id") == previous_track_id
             compatible.append((same_id, distance, candidate))
@@ -200,16 +199,15 @@ def suggest_event_windows(
     fps: float,
     threshold: float,
     *,
-    expansion_s: float = 0.0,
+    expansion_s: float = DEFAULT_WINDOW_EXPANSION_S,
     merge_gap_s: float = DEFAULT_MERGE_GAP_S,
     injury_cutoff_s: float | None = None,
     timestamps: Sequence[float] | None = None,
 ) -> list[tuple[float, float]]:
     """Suggest time windows from motion samples on the Sony timeline.
 
-    The default returns the sample windows used by the brief's compact unit
-    example.  Production callers pass ``expansion_s=1.0`` to apply the
-    required one-second review padding.
+    The default applies the required one-second review padding. Callers that
+    need the unexpanded sample interval can pass ``expansion_s=0.0``.
     """
     try:
         fps_value = float(fps)
@@ -304,8 +302,7 @@ class EventMetrics:
         return events
 
     def to_dict(self) -> dict[str, Any]:
-        return {key: (float(value) if isinstance(value, (np.floating, float)) else value)
-                for key, value in asdict(self).items()}
+        return json_safe(asdict(self))
 
 
 def create_injury_event(

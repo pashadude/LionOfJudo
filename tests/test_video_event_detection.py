@@ -1,3 +1,4 @@
+import json
 import unittest
 
 import numpy as np
@@ -14,10 +15,18 @@ from pipeline.video_event_detection import (
 class EventDetectionTests(unittest.TestCase):
     def test_merges_adjacent_motion_samples_into_one_window(self):
         windows = suggest_event_windows(
-            [0.0, 0.1, 0.9, 1.1, 0.0], fps=10.0, threshold=0.5
+            [0.0, 0.1, 0.9, 1.1, 0.0],
+            fps=10.0,
+            threshold=0.5,
+            expansion_s=0.0,
         )
 
         self.assertEqual(windows, [(0.1, 0.4)])
+
+    def test_default_expansion_adds_one_second_on_both_sides(self):
+        windows = suggest_event_windows([0.0, 1.0, 0.0], fps=1.0, threshold=0.5)
+
+        self.assertEqual(windows, [(0.0, 3.0)])
 
     def test_expands_merges_and_clips_windows_at_injury_cutoff(self):
         windows = suggest_event_windows(
@@ -92,6 +101,29 @@ class EventDetectionTests(unittest.TestCase):
         )
 
         self.assertIsNone(recovered)
+
+    def test_recovery_cannot_bypass_hsv_evidence_with_boolean(self):
+        recovered = recover_blue_pose(
+            [{
+                "bbox": (20, 20, 60, 80),
+                "track_id": 12,
+                "blue_dominant": True,
+            }],
+            previous_bbox=(20, 20, 60, 80),
+            frame=None,
+            previous_track_id=7,
+        )
+
+        self.assertIsNone(recovered)
+
+    def test_event_metrics_convert_non_finite_numbers_to_json_null(self):
+        event = EventMetrics(0.0, float("nan"), intenzitet_pokreta_0_100=float("inf"))
+
+        payload = event.to_dict()
+
+        self.assertIsNone(payload["sony_end_s"])
+        self.assertIsNone(payload["intenzitet_pokreta_0_100"])
+        json.dumps(payload, allow_nan=False)
 
 
 if __name__ == "__main__":
