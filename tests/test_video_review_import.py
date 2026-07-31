@@ -1,14 +1,17 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase, main
 from unittest.mock import patch
 
 import tempfile
+import numpy as np
 
 from pipeline.video_review_contract import AnchorPair
 from pipeline.video_review_import import (
     import_session,
     make_side_by_side,
+    run_pose_analysis,
     verify_media_export,
     write_review_json,
 )
@@ -17,17 +20,25 @@ from pipeline.video_review_import import (
 class VideoReviewImportTests(TestCase):
     @patch("pipeline.video_review_import.subprocess.run")
     def test_side_by_side_maps_iphone_with_affine_setpts(self, mock_run):
+        def create_output(command, **_kwargs):
+            Path(command[-1]).write_bytes(b"video")
+
+        mock_run.side_effect = create_output
         with self.subTest("command construction"):
             with self._temporary_directory() as output_dir:
                 output_dir = Path(output_dir)
-                make_side_by_side(
-                    Path("sony.mp4"),
-                    Path("iphone.mov"),
-                    slope=1.002,
-                    intercept=-19.4,
-                    end_s=126.0,
-                    output=output_dir / "out.mp4",
-                )
+                with patch(
+                    "pipeline.video_review_import.probe_duration",
+                    return_value=126.0,
+                ):
+                    make_side_by_side(
+                        Path("sony.mp4"),
+                        Path("iphone.mov"),
+                        slope=1.002,
+                        intercept=-19.4,
+                        end_s=126.0,
+                        output=output_dir / "out.mp4",
+                    )
 
         command = mock_run.call_args.args[0]
         command_text = " ".join(command)
@@ -35,6 +46,45 @@ class VideoReviewImportTests(TestCase):
         self.assertIn("trim=start=0:end=126.000", command_text)
         self.assertIn("-map", command)
         self.assertIn("0:a?", command)
+
+    def test_side_by_side_rejects_missing_output_after_ffmpeg(self):
+        with patch("pipeline.video_review_import.subprocess.run"):
+            with self._temporary_directory() as raw_root:
+                with self.assertRaises(ValueError):
+                    make_side_by_side(
+                        Path("sony.mp4"), Path("iphone.mov"), 1.0, 0.0, 2.0,
+                        Path(raw_root) / "missing.mp4",
+                    )
+
+    def test_side_by_side_rejects_zero_byte_output_after_ffmpeg(self):
+        def create_zero_byte(command, **_kwargs):
+            Path(command[-1]).touch()
+
+        with patch(
+            "pipeline.video_review_import.subprocess.run",
+            side_effect=create_zero_byte,
+        ):
+            with self._temporary_directory() as raw_root:
+                with self.assertRaises(ValueError):
+                    make_side_by_side(
+                        Path("sony.mp4"), Path("iphone.mov"), 1.0, 0.0, 2.0,
+                        Path(raw_root) / "empty.mp4",
+                    )
+
+    def test_side_by_side_rejects_duration_invalid_output_after_ffmpeg(self):
+        def create_output(command, **_kwargs):
+            Path(command[-1]).write_bytes(b"video")
+
+        with patch(
+            "pipeline.video_review_import.subprocess.run",
+            side_effect=create_output,
+        ), patch("pipeline.video_review_import.probe_duration", return_value=5.0):
+            with self._temporary_directory() as raw_root:
+                with self.assertRaises(ValueError):
+                    make_side_by_side(
+                        Path("sony.mp4"), Path("iphone.mov"), 1.0, 0.0, 2.0,
+                        Path(raw_root) / "wrong-duration.mp4",
+                    )
 
     def test_side_by_side_rejects_invalid_range_before_ffmpeg(self):
         with patch("pipeline.video_review_import.subprocess.run") as mock_run:
@@ -97,6 +147,128 @@ class VideoReviewImportTests(TestCase):
                         blue_seed=(1, 2, 3, 4),
                     )
                 mock_run.assert_not_called()
+
+    def test_run_pose_analysis_uses_seeded_track_and_stops_at_cutoff(self):
+        frames = [self._pose_frame(0.0), self._pose_frame(20.0), self._pose_frame(40.0)]
+        capture = _FakeCapture(frames, fps=10.0)
+        model = _FakePoseModel(
+            [
+                _FakeResult(
+                    [((100, 100, 120, 180), 2, self._keypoints(0.0)),
+                     ((0, 0, 20, 80), 7, self._keypoints(0.0))]
+                ),
+                _FakeResult(
+                    [((100, 100, 120, 180), 2, self._keypoints(0.0)),
+                     ((0, 0, 20, 80), 7, self._keypoints(20.0))]
+                ),
+                _FakeResult(
+                    [((100, 100, 120, 180), 2, self._keypoints(0.0)),
+                     ((0, 0, 20, 80), 7, self._keypoints(40.0))]
+                ),
+            ]
+        )
+
+        result = run_pose_analysis(
+            Path("sony.mp4"),
+            0.0,
+            0.3,
+            (0, 0, 20, 80),
+            model=model,
+            video_capture_factory=lambda _path: capture,
+            fps=10.0,
+        )
+
+        self.assertEqual(result["selected_track_id"], 7)
+        self.assertEqual(len(result["frame_metrics"]), 3)
+        self.assertTrue(result["events"])
+        self.assertTrue(
+            all(event["sony_end_s"] <= 0.3 for event in result["events"])
+        )
+        self.assertTrue(
+            all(not event["iskljuceno_iz_statistike"] for event in result["events"])
+        )
+        self.assertIn("brzina_ulaska_norm", result["events"][0])
+        self.assertIn("intenzitet_pokreta_0_100", result["events"][0])
+        self.assertEqual(model.track_calls, 3)
+
+    @patch("pipeline.video_review_import.run_pose_analysis")
+    @patch("pipeline.video_review_import.make_side_by_side")
+    @patch("pipeline.video_review_import.cut_clip")
+    def test_import_persists_pose_frame_and_event_metrics(
+        self, mock_cut, mock_composite, mock_pose
+    ):
+        with self._temporary_directory() as raw_root:
+            root = Path(raw_root)
+            sony, iphone = self._sources(root)
+            mock_cut.side_effect = self._touch_result
+            mock_composite.side_effect = self._touch_result
+            mock_pose.return_value = {
+                "selected_track_id": 7,
+                "fps": 10.0,
+                "frame_metrics": [{"timestamp_s": 1.0, "vidljivo": True}],
+                "events": [{
+                    "event_id": "e-1",
+                    "sony_start_s": 11.0,
+                    "sony_end_s": 14.0,
+                    "metrics": {"brzina_ulaska_norm": 0.8},
+                }],
+            }
+            with patch(
+                "pipeline.video_review_import.probe_duration",
+                side_effect=self._duration_for_path,
+            ):
+                review_path = import_session(
+                    sony, iphone, root / "session", self._anchors(), 20.0, (1, 2, 3, 4)
+                )
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            self.assertEqual(review["frame_metrics"][0]["timestamp_s"], 1.0)
+            self.assertEqual(review["events"][0]["brzina_ulaska_norm"], 0.8)
+            self.assertTrue(
+                any(event.get("prijavljen_povredni_dogadjaj") for event in review["events"])
+            )
+            self.assertTrue((root / "session" / "analysis" / "frame_metrics.json").exists())
+            self.assertTrue((root / "session" / "analysis" / "event_metrics.json").exists())
+
+    @patch("pipeline.video_review_import.run_pose_analysis", return_value=[])
+    @patch("pipeline.video_review_import.make_side_by_side")
+    @patch("pipeline.video_review_import.cut_clip")
+    def test_end_of_source_cutoff_has_preceding_injury_window(
+        self, mock_cut, mock_composite, _mock_pose
+    ):
+        with self._temporary_directory() as raw_root:
+            root = Path(raw_root)
+            sony, iphone = self._sources(root)
+            mock_cut.side_effect = self._touch_result
+            mock_composite.side_effect = self._touch_result
+            with patch(
+                "pipeline.video_review_import.probe_duration",
+                side_effect=lambda path: (
+                    10.0 if Path(path).name == "sony.mp4" and Path(path).parent.name != "povreda" else
+                    60.0 if Path(path).name == "iphone.mov" and Path(path).parent.name != "povreda" else
+                    10.0 if Path(path).name == "session_side_by_side.mp4" else
+                    self._duration_for_path(path)
+                ),
+            ):
+                review_path = import_session(
+                    sony,
+                    iphone,
+                    root / "session",
+                    [
+                        AnchorPair("pocetak", 2.0, 30.0, True, 3),
+                        AnchorPair("kontrola", 4.0, 32.0, True, 3),
+                    ],
+                    10.0,
+                    (1, 2, 3, 4),
+                )
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            injury = next(
+                event for event in review["events"]
+                if event.get("prijavljen_povredni_dogadjaj")
+            )
+            self.assertEqual(injury["sony_end_s"], 10.0)
+            self.assertEqual(injury["sony_start_s"], 9.0)
+            self.assertTrue(injury["iskljuceno_iz_statistike"])
+            self.assertTrue((root / "session" / "events" / "povreda" / "sony.mp4").exists())
 
     @patch("pipeline.video_review_import.run_pose_analysis", return_value=[])
     @patch("pipeline.video_review_import.make_side_by_side")
@@ -284,6 +456,78 @@ class VideoReviewImportTests(TestCase):
             return 20.0
         return 4.0
 
+    @staticmethod
+    def _pose_frame(offset):
+        return np.zeros((32, 32, 3), dtype=np.uint8)
+
+    @staticmethod
+    def _keypoints(offset):
+        keypoints = np.zeros((17, 3), dtype=float)
+        keypoints[:, 2] = 1.0
+        keypoints[11, :2] = [10.0 + offset, 20.0]
+        keypoints[12, :2] = [20.0 + offset, 20.0]
+        keypoints[5, :2] = [10.0 + offset, 0.0]
+        keypoints[6, :2] = [20.0 + offset, 0.0]
+        keypoints[15, :2] = [5.0 + offset, 30.0]
+        keypoints[16, :2] = [25.0 + offset, 30.0]
+        return keypoints
+
 
 if __name__ == "__main__":
     main()
+
+
+class _FakeCapture:
+    def __init__(self, frames, fps):
+        self.frames = iter(frames)
+        self.fps = fps
+
+    def get(self, _property):
+        return self.fps
+
+    def read(self):
+        try:
+            return True, next(self.frames)
+        except StopIteration:
+            return False, None
+
+    def set(self, _property, _value):
+        return True
+
+    def release(self):
+        return None
+
+
+class _FakeTensor:
+    def __init__(self, value):
+        self.value = value
+
+    def tolist(self):
+        return self.value.tolist() if hasattr(self.value, "tolist") else self.value
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return np.asarray(self.value)
+
+
+class _FakeResult:
+    def __init__(self, detections):
+        self.boxes = SimpleNamespace(
+            xyxy=_FakeTensor(np.asarray([item[0] for item in detections], dtype=float)),
+            id=_FakeTensor(np.asarray([item[1] for item in detections], dtype=float)),
+        )
+        self.keypoints = SimpleNamespace(
+            data=_FakeTensor(np.asarray([item[2] for item in detections], dtype=float))
+        )
+
+
+class _FakePoseModel:
+    def __init__(self, results):
+        self.results = iter(results)
+        self.track_calls = 0
+
+    def track(self, _frame, **_kwargs):
+        self.track_calls += 1
+        return [next(self.results)]

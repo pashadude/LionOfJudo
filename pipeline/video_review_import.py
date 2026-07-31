@@ -7,11 +7,22 @@ import json
 import math
 import os
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from pipeline.clip_extractor import cut_clip, probe_duration
+import numpy as np
+
+from pipeline.clip_extractor import cut_clip, probe_duration, probe_fps
+from pipeline.video_event_detection import (
+    EventMetrics,
+    motion_energy,
+    recover_blue_pose,
+    select_blue_detection,
+    suggest_event_metrics,
+)
 from pipeline.video_pose_metrics import json_safe
+from pipeline.video_pose_metrics import compute_pose_metrics
 from pipeline.video_review_contract import (
     AnchorPair,
     ReviewEvent,
@@ -137,10 +148,7 @@ def make_side_by_side(
         str(output),
     ]
     subprocess.run(command, check=True, capture_output=True)
-    # Real ffmpeg creates the output; the existence guard keeps command-only
-    # callers and mocked subprocess tests independent of ffprobe.
-    if output.exists():
-        verify_media_export(output, end_s, EXPORT_TOLERANCE_S)
+    verify_media_export(output, end_s, EXPORT_TOLERANCE_S)
     return output
 
 
@@ -169,20 +177,227 @@ def write_review_json(output_dir: Path, payload: Mapping[str, Any]) -> Path:
     return output
 
 
+def _write_analysis_json(path: Path, payload: Mapping[str, Any]) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(
+                json_safe(dict(payload)),
+                handle,
+                ensure_ascii=True,
+                allow_nan=False,
+                indent=2,
+                sort_keys=True,
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return path
+
+
 def run_pose_analysis(
     sony: Path,
     start_s: float,
     end_s: float,
     blue_seed: Sequence[float],
-) -> list[Mapping[str, Any]]:
-    """Hook for Task 5 pose inference, restricted to the usable Sony range.
+    *,
+    model: Any | None = None,
+    video_capture_factory: Any | None = None,
+    fps: float | None = None,
+    device: str = "mps",
+    model_path: Path | str = "yolo11x-pose.pt",
+    event_threshold: float = 0.5,
+) -> dict[str, Any]:
+    """Track the coach-selected athlete and derive Task 3 video metrics.
 
-    Task 4 keeps inference optional so importing a session remains local and
-    deterministic on machines without a pose-model runtime.  The review app
-    can replace this boundary with the Task 3 metric runner.
+    YOLO tracking and OpenCV are imported only when this production path is
+    used. Tests inject both boundaries, so no model download or video decode
+    is needed for unit coverage.
     """
-    del sony, start_s, end_s, blue_seed
-    return []
+    start_s = _finite(start_s, "start_s")
+    end_s = _finite(end_s, "end_s")
+    if start_s < 0.0 or end_s <= start_s:
+        raise ValueError("pose prozor mora biti nenegativan i rastuci")
+    seed = _blue_seed(blue_seed)
+
+    if video_capture_factory is None:
+        import cv2
+
+        video_capture_factory = cv2.VideoCapture
+        position_property = cv2.CAP_PROP_POS_FRAMES
+        fps_property = cv2.CAP_PROP_FPS
+    else:
+        position_property = 1
+        fps_property = 5
+
+    capture = video_capture_factory(str(Path(sony)))
+    fps_value = float(fps) if fps is not None else float(capture.get(fps_property) or 0.0)
+    if not math.isfinite(fps_value) or fps_value <= 0.0:
+        fps_value = probe_fps(Path(sony))
+
+    if model is None:
+        from ultralytics import YOLO
+
+        model = YOLO(str(model_path))
+    if hasattr(model, "predictor") and model.predictor is not None:
+        for tracker in getattr(model.predictor, "trackers", []) or []:
+            tracker.reset()
+
+    start_frame = int(math.floor(start_s * fps_value))
+    capture.set(position_property, start_frame)
+    frame_index = start_frame
+    pose_frames: list[np.ndarray] = []
+    timestamps: list[float] = []
+    previous_bbox: Any | None = None
+    selected_track_id: Any | None = None
+    selected_seen = False
+
+    while True:
+        ok, frame = capture.read()
+        if not ok:
+            break
+        timestamp = frame_index / fps_value
+        frame_index += 1
+        if timestamp < start_s:
+            continue
+        if timestamp >= end_s:
+            break
+
+        result = model.track(frame, persist=True, verbose=False, device=device)[0]
+        candidates = _tracking_candidates(result)
+        selected = None
+        if selected_track_id is None:
+            selected = select_blue_detection(candidates, seed)
+            if selected is not None:
+                selected_track_id = selected.get("track_id")
+        else:
+            selected = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate.get("track_id") == selected_track_id
+                ),
+                None,
+            )
+            if selected is None and previous_bbox is not None:
+                selected = recover_blue_pose(
+                    candidates,
+                    previous_bbox,
+                    frame=frame,
+                    previous_track_id=selected_track_id,
+                )
+                if selected is not None:
+                    selected_track_id = selected.get("track_id", selected_track_id)
+
+        if selected is None:
+            pose_frames.append(_missing_pose())
+        else:
+            selected_seen = True
+            previous_bbox = selected["bbox"]
+            pose_frames.append(selected["keypoints"])
+        timestamps.append(float(timestamp))
+
+    capture.release()
+    metrics = compute_pose_metrics(pose_frames, fps_value, timestamps)
+    energy = motion_energy(metrics)
+    suggested = suggest_event_metrics(
+        energy,
+        fps_value,
+        float(event_threshold),
+        injury_cutoff_s=end_s,
+        timestamps=timestamps,
+    )
+    event_metrics = [
+        _enrich_event_metrics(event, metrics, energy)
+        for event in suggested
+        if event.status != "povreda"
+    ]
+    return {
+        "fps": fps_value,
+        "selected_track_id": selected_track_id,
+        "blue_seed_sony": seed,
+        "athlete_seen": selected_seen,
+        "frame_metrics": [metric.to_dict() for metric in metrics],
+        "motion_energy": json_safe(energy),
+        "events": [event.to_dict() for event in event_metrics],
+    }
+
+
+def _missing_pose() -> np.ndarray:
+    pose = np.zeros((17, 3), dtype=float)
+    return pose
+
+
+def _tracking_candidates(result: Any) -> list[dict[str, Any]]:
+    if result.boxes is None or result.keypoints is None:
+        return []
+    boxes = np.asarray(_tensor_to_numpy(result.boxes.xyxy), dtype=float)
+    keypoints = np.asarray(
+        _tensor_to_numpy(result.keypoints.data), dtype=float
+    )
+    ids_value = getattr(result.boxes, "id", None)
+    ids = None if ids_value is None else np.asarray(_tensor_to_numpy(ids_value)).reshape(-1)
+    candidates = []
+    for index, (bbox, pose) in enumerate(zip(boxes, keypoints)):
+        if len(bbox) != 4 or pose.shape[0] < 17 or pose.shape[1] < 3:
+            continue
+        track_id = None if ids is None or index >= len(ids) else int(ids[index])
+        candidates.append({
+            "bbox": tuple(float(value) for value in bbox),
+            "track_id": track_id,
+            "keypoints": np.asarray(pose[:17, :3], dtype=float),
+        })
+    return candidates
+
+
+def _tensor_to_numpy(value: Any) -> Any:
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    return value
+
+
+def _enrich_event_metrics(
+    event: EventMetrics,
+    metrics: Sequence[Any],
+    energy: Sequence[float | None],
+) -> EventMetrics:
+    samples = [
+        (metric, energy[index])
+        for index, metric in enumerate(metrics)
+        if event.sony_start_s <= metric.timestamp_s <= event.sony_end_s
+    ]
+    speeds = [
+        metric.brzina_ulaska_norm_s
+        for metric, _ in samples
+        if metric.brzina_ulaska_norm_s is not None
+    ]
+    rotations = [
+        abs(metric.rotation_2d_dps)
+        for metric, _ in samples
+        if metric.rotation_2d_dps is not None
+    ]
+    hip_levels = [
+        metric.hip_level_norm
+        for metric, _ in samples
+        if metric.hip_level_norm is not None
+    ]
+    energies = [value for _, value in samples if value is not None]
+    return replace(
+        event,
+        brzina_ulaska_norm=max(speeds) if speeds else None,
+        rotacija_trupa_2d_dps=max(rotations) if rotations else None,
+        promena_visine_kukova_norm=(
+            max(hip_levels) - min(hip_levels) if hip_levels else None
+        ),
+        intenzitet_pokreta_0_100=(max(energies) * 100.0 if energies else None),
+    )
 
 
 def _as_anchors(values: Iterable[AnchorPair | Mapping[str, Any]]) -> list[AnchorPair]:
@@ -265,6 +480,15 @@ def _window_for_clip(
     return (start, end) if end > start else None
 
 
+def _injury_trace_window(
+    injury_cutoff_s: float, sony_duration_s: float
+) -> tuple[float, float] | None:
+    """Return a one-second trace window, including an end-of-source cutoff."""
+    end = min(sony_duration_s, injury_cutoff_s + 1.0)
+    start = max(0.0, end - 1.0)
+    return (start, end) if end > start else None
+
+
 def _export_clip(
     source: Path,
     start_s: float,
@@ -314,6 +538,12 @@ def _event_payload(
     if isinstance(metrics, Mapping):
         event.update(json_safe(dict(metrics)))
     for key in (
+        "status",
+        "brzina_ulaska_norm",
+        "rotacija_trupa_2d_dps",
+        "promena_visine_kukova_norm",
+        "vreme_oporavka_s",
+        "intenzitet_pokreta_0_100",
         "predlog_tehnike",
         "potvrdena_tehnika",
         "glasovna_fraza",
@@ -375,23 +605,38 @@ def import_session(
     if injury_cutoff_s > sony_duration_s:
         raise ValueError("injury cutoff je posle kraja Sony videa")
 
-    raw_events = run_pose_analysis(sony, 0.0, injury_cutoff_s, blue_seed)
+    pose_result = run_pose_analysis(sony, 0.0, injury_cutoff_s, blue_seed)
+    if isinstance(pose_result, Mapping):
+        frame_metrics = json_safe(list(pose_result.get("frame_metrics", [])))
+        pose_events = pose_result.get("events", [])
+        pose_summary = {
+            "fps": pose_result.get("fps"),
+            "selected_track_id": pose_result.get("selected_track_id"),
+            "athlete_seen": pose_result.get("athlete_seen", False),
+        }
+    else:
+        frame_metrics = []
+        pose_events = pose_result
+        pose_summary = {}
     events = []
-    for raw_event in raw_events:
+    for raw_event in pose_events:
+        if hasattr(raw_event, "to_dict"):
+            raw_event = raw_event.to_dict()
         event = _event_payload(raw_event, injury_cutoff_s, time_map)
         if event is not None:
             events.append(event)
     if not any(event.get("prijavljen_povredni_dogadjaj") for event in events):
-        injury_end = min(sony_duration_s, injury_cutoff_s + 1.0)
-        if injury_end > injury_cutoff_s:
+        injury_window = _injury_trace_window(injury_cutoff_s, sony_duration_s)
+        if injury_window is not None:
+            injury_start, injury_end = injury_window
             events.append(
                 {
                     "event_id": "povreda",
                     "status": "povreda",
-                    "sony_start_s": injury_cutoff_s,
+                    "sony_start_s": injury_start,
                     "sony_end_s": injury_end,
                     "iphone_start_s": (
-                        injury_cutoff_s - time_map.intercept
+                        injury_start - time_map.intercept
                     ) / time_map.slope,
                     "iphone_end_s": (injury_end - time_map.intercept) / time_map.slope,
                     "predlog_tehnike": None,
@@ -515,6 +760,9 @@ def import_session(
         "time_map": time_map.to_dict(),
         "injury_cutoff_s": injury_cutoff_s,
         "blue_seed_sony": blue_seed,
+        "pose_analysis": pose_summary,
+        "frame_metrics": frame_metrics,
+        "event_metrics": events,
         "events": events,
         "status": "Uvoz zavrsen; normalna obrada zaustavljena na potvrdenom preseku povrede.",
     }
@@ -522,6 +770,14 @@ def import_session(
         payload = _merge_trainer_annotations(payload, previous)
 
     review_path = write_review_json(output_dir, payload)
+    _write_analysis_json(
+        output_dir / "analysis" / "frame_metrics.json",
+        {"frame_metrics": frame_metrics, "pose_analysis": pose_summary},
+    )
+    _write_analysis_json(
+        output_dir / "analysis" / "event_metrics.json",
+        {"events": events},
+    )
     _write_summary(
         output_dir,
         {
