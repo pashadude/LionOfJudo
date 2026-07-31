@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from pipeline.video_review_import import import_session
+from coach_app.server import create_server
 
 
 def _blue_seed(value: str) -> tuple[float, float, float, float]:
@@ -40,6 +41,18 @@ def _import_command(args: argparse.Namespace) -> int:
         force_reimport=args.force_reimport,
     )
     print(f"Uvoz zavrsen: {review_path}")
+    return 0
+
+
+def _serve_command(args: argparse.Namespace) -> int:
+    server = create_server(args.session_dir, port=args.port)
+    print(f"Pregled dostupan na {server.base_url}", flush=True)
+    try:
+        server.httpd.serve_forever()
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        server.shutdown()
     return 0
 
 
@@ -83,6 +96,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="ponovi uvoz uz ocuvanje postojecih trenerovih zabelezbi",
     )
     import_parser.set_defaults(handler=_import_command)
+
+    serve_parser = subparsers.add_parser(
+        "serve", help="pokreni lokalni pregled u pregledaču"
+    )
+    serve_parser.add_argument(
+        "--session-dir", required=True, type=Path,
+        help="direktorijum uvožene sesije sa review.json",
+    )
+    serve_parser.add_argument(
+        "--port", type=int, default=8765,
+        help="lokalni port (podrazumevano 8765)",
+    )
+    serve_parser.set_defaults(handler=_serve_command)
     return parser
 
 

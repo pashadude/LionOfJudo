@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="sr-Latn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video pregled</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Lokalni pregled sesije</p>
+      <h1 id="session-title">Video pregled</h1>
+    </div>
+    <div class="top-actions">
+      <button id="sync-button" class="button secondary" type="button">Sinhronizacija</button>
+      <a id="export-link" class="button secondary" href="/izvestaj.csv" download>Izvezi izveštaj</a>
+    </div>
+  </header>
+
+  <div id="app-status" class="status" role="status" aria-live="polite"></div>
+  <span class="sr-only">Prijavljen povredni događaj</span>
+  <span class="sr-only">Nedovoljno vidljivo</span>
+  <div class="workspace">
+    <aside class="event-rail panel" aria-labelledby="events-heading">
+      <div class="panel-heading">
+        <h2 id="events-heading">Događaji</h2>
+        <span id="event-count" class="count">0</span>
+      </div>
+      <ul id="event-list" class="event-list"></ul>
+    </aside>
+
+    <main class="review-main">
+      <section class="video-section panel" aria-label="Sinhronizovani video prikaz">
+        <div class="video-grid">
+          <figure>
+            <figcaption>Sony, glavna vremenska osa</figcaption>
+            <video id="sony-video" preload="metadata" playsinline></video>
+          </figure>
+          <figure>
+            <figcaption>iPhone, sinhronizovani prikaz</figcaption>
+            <video id="iphone-video" preload="metadata" playsinline></video>
+          </figure>
+        </div>
+        <div class="playback-toolbar" aria-label="Kontrole reprodukcije">
+          <button class="icon-button" data-action="toggle-play" type="button" aria-label="Pokreni ili zaustavi" title="Pokreni ili zaustavi">▶</button>
+          <button class="icon-button" data-action="step-back" type="button" aria-label="Prethodni kadar" title="Prethodni kadar">◀|</button>
+          <button class="icon-button" data-action="step-forward" type="button" aria-label="Sledeći kadar" title="Sledeći kadar">|▶</button>
+          <button class="icon-button" data-action="restart" type="button" aria-label="Vrati na početak događaja" title="Vrati na početak događaja">↺</button>
+          <span id="time-readout" class="time-readout">0.00 s</span>
+          <input id="master-seek" type="range" min="0" max="1" step="0.001" value="0" aria-label="Sony vremenska osa">
+        </div>
+      </section>
+
+      <section class="charts-section" aria-label="Video metrike">
+        <article class="chart-panel"><h3>Brzina ulaska</h3><canvas data-metric="brzina_ulaska_norm"></canvas></article>
+        <article class="chart-panel"><h3>Rotacija trupa (2D)</h3><canvas data-metric="rotacija_trupa_2d_dps"></canvas></article>
+        <article class="chart-panel"><h3>Visina kukova</h3><canvas data-metric="promena_visine_kukova_norm"></canvas></article>
+        <article class="chart-panel"><h3>Stabilnost</h3><canvas data-metric="vreme_oporavka_s"></canvas></article>
+        <article class="chart-panel"><h3>Intenzitet pokreta</h3><canvas data-metric="intenzitet_pokreta_0_100"></canvas></article>
+      </section>
+
+      <section class="annotation-section panel" aria-labelledby="annotation-heading">
+        <div class="panel-heading">
+          <h2 id="annotation-heading">Trenerska ocena</h2>
+          <span id="visibility-state" class="visibility-state"></span>
+        </div>
+        <form id="annotation-form">
+          <div class="form-grid">
+            <label>Predlog tehnike<input id="suggested-technique" type="text" readonly></label>
+            <label>Potvrđena tehnika<input id="confirmed-technique" name="potvrdena_tehnika" type="text" maxlength="120"></label>
+            <label>Ocena<select id="score" name="ocena"><option value="">Izaberi</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label>
+            <label class="wide">Napomena<textarea id="note" name="napomena" maxlength="2000" rows="4"></textarea></label>
+          </div>
+          <div class="form-actions">
+            <button id="save-button" class="button primary" type="submit">Sačuvaj</button>
+            <button id="share-button" class="button secondary" type="button">Podeli</button>
+            <button id="merge-button" class="button secondary" type="button" disabled title="Izaberite dva događaja">Spoji</button>
+            <button id="delete-button" class="button danger" type="button" disabled title="Brisanje nije dostupno u ovom pregledu">Obriši</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
