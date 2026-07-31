@@ -49,7 +49,10 @@ class VideoSyncTests(unittest.TestCase):
             session_id="demo",
             sony_video="sony.mp4",
             iphone_video="iphone.mov",
-            anchors=[AnchorPair("pocetak", 10.0, 30.0), AnchorPair("kontrola", 110.0, 130.0)],
+            anchors=[
+                AnchorPair("pocetak", 10.0, 30.0, user_confirmed=True, triple_tap_count=3),
+                AnchorPair("kontrola", 110.0, 130.0, user_confirmed=True, triple_tap_count=3),
+            ],
             injury_cutoff_s=126.0,
             events=[ReviewEvent("e-1", 100.0, 105.0)],
         )
@@ -57,7 +60,18 @@ class VideoSyncTests(unittest.TestCase):
         encoded = json.dumps(session.to_dict())
         restored = ReviewSession.from_dict(json.loads(encoded))
 
-        self.assertEqual(restored.to_dict(), session.to_dict())
+        self.assertEqual(restored, session)
+
+    def test_serializers_reject_invalid_post_construction_mutation(self):
+        event = ReviewEvent("e-1", 100.0, 105.0)
+        event.sony_start_s = Decimal("100")
+        with self.assertRaises(TypeError):
+            event.to_dict()
+
+        session = self._session()
+        session.events[0].sony_end_s = float("inf")
+        with self.assertRaises(ValueError):
+            session.to_dict()
 
     def test_time_map_round_trips_through_json_scalars_lists_and_dicts(self):
         time_map = TimeMap(slope=1.004, intercept=-20.12)

@@ -47,6 +47,7 @@ class AnchorPair:
         return self.user_confirmed and self.triple_tap_count == 3
 
     def to_dict(self) -> dict[str, Any]:
+        self.__post_init__()
         return {
             "name": self.name,
             "sony_s": self.sony_s,
@@ -61,6 +62,8 @@ class AnchorPair:
             name=value["name"],
             sony_s=value["sony_s"],
             iphone_s=value["iphone_s"],
+            user_confirmed=value.get("user_confirmed", False),
+            triple_tap_count=value.get("triple_tap_count", 0),
         )
 
 
@@ -88,6 +91,7 @@ class ReviewEvent:
             self.iskljuceno_iz_statistike = True
 
     def to_dict(self) -> dict[str, Any]:
+        self.__post_init__()
         return {
             "event_id": self.event_id,
             "sony_start_s": self.sony_start_s,
@@ -130,6 +134,7 @@ class ReviewSession:
         return [event for event in self.events if not event.iskljuceno_iz_statistike]
 
     def to_dict(self) -> dict[str, Any]:
+        self.__post_init__()
         return {
             "session_id": self.session_id,
             "sony_video": self.sony_video,

@@ -23,6 +23,7 @@ class TimeMap:
         object.__setattr__(self, "intercept", normalized_intercept)
 
     def to_dict(self) -> dict[str, Any]:
+        self.__post_init__()
         return {"slope": self.slope, "intercept": self.intercept}
 
     @classmethod
