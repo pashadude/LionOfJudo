@@ -136,12 +136,18 @@ class CoachServerTests(unittest.TestCase):
     def test_server_lifecycle_and_session_endpoints(self):
         server = self.start_server()
         self.assertEqual(server.httpd.server_address[0], "127.0.0.1")
+        self.assertTrue((self.root / "izvestaj.csv").exists())
+        self.assertTrue((self.root / "izvestaj.md").exists())
         status, session = self.read_json(server.base_url + "/api/session")
         self.assertEqual(status, 200)
         self.assertEqual(session["session_id"], "demo")
         status, event = self.read_json(server.base_url + "/api/events/e-1")
         self.assertEqual(status, 200)
         self.assertEqual(event["event_id"], "e-1")
+        for report in ("/izvestaj.csv", "/izvestaj.md"):
+            with urlopen(server.base_url + report) as response:
+                self.assertEqual(response.status, 200)
+                self.assertTrue(response.read())
 
     def test_annotation_persists_and_regenerates_csv_and_markdown(self):
         server = self.start_server()
@@ -219,6 +225,21 @@ class CoachServerTests(unittest.TestCase):
                 "ocena": 4,
                 "napomena": "Prijavljen događaj.",
             }
+        ).encode()
+        request = Request(
+            server.base_url + "/api/events/povreda/annotation",
+            data=body,
+            method="PUT",
+            headers={"Content-Type": "application/json"},
+        )
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(request)
+        self.assertEqual(raised.exception.code, 400)
+
+    def test_injury_annotation_put_rejects_read_only_payload(self):
+        server = self.start_server()
+        body = json.dumps(
+            {"potvrdena_tehnika": "", "ocena": None, "napomena": ""}
         ).encode()
         request = Request(
             server.base_url + "/api/events/povreda/annotation",
@@ -318,10 +339,23 @@ class CoachServerTests(unittest.TestCase):
         ):
             self.assertIn(label, html)
         self.assertEqual(html.count("<canvas"), 5)
+        self.assertIn('id="save-button" class="button primary" type="submit" disabled', html)
         for asset in ("/static/app.js", "/static/styles.css"):
             with urlopen(server.base_url + asset) as response:
                 self.assertEqual(response.status, 200)
                 self.assertTrue(response.read())
+
+    def test_static_ui_contract_uses_global_cursor_and_requires_persisted_fps(self):
+        app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("function localTimesForGlobal", app_js)
+        self.assertIn("globalSonyTime - Number(event.sony_start_s || 0)", app_js)
+        self.assertIn("iphoneTime(globalSonyTime) - Number(event.iphone_start_s || 0)", app_js)
+        self.assertIn("function globalSonyTimeForLocal", app_js)
+        self.assertIn("function sonyFps", app_js)
+        self.assertNotIn("|| 30", app_js)
+        self.assertIn("FPS Sony nije dostupan", app_js)
 
 
 if __name__ == "__main__":

@@ -102,6 +102,8 @@ def _validate_annotation(event_id: object, payload: object, event: Mapping[str, 
         raise ValueError("event ID nije validan")
     if "/" in event_id or "\\" in event_id or event_id in {".", ".."}:
         raise ValueError("event ID nije validan")
+    if _event_is_injury(event):
+        raise ValueError("povredni događaj je samo za čitanje")
     if not isinstance(payload, dict) or set(payload) != ANNOTATION_FIELDS:
         raise ValueError("annotation mora imati tačno polja potvrđena tehnika, ocena i napomena")
     technique = payload["potvrdena_tehnika"]
@@ -111,12 +113,8 @@ def _validate_annotation(event_id: object, payload: object, event: Mapping[str, 
         raise ValueError("potvrđena tehnika mora biti tekst do 120 znakova")
     if not isinstance(note, str) or len(note) > MAX_NOTE_LENGTH:
         raise ValueError("napomena mora biti tekst do 2000 znakova")
-    if _event_is_injury(event):
-        if technique or score is not None:
-            raise ValueError("ocena i potvrđena tehnika su onemogućene za povredni događaj")
-    else:
-        if isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 5:
-            raise ValueError("ocena mora biti ceo broj od 1 do 5")
+    if isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 5:
+        raise ValueError("ocena mora biti ceo broj od 1 do 5")
     return {
         "potvrdena_tehnika": technique,
         "ocena": score,
@@ -243,6 +241,7 @@ class ReviewServer:
         self.review_path = self.session_dir / "review.json"
         if not self.review_path.is_file():
             raise ValueError("sesija nema review.json")
+        _write_report(self.review_path, _strict_load(self.review_path))
         self.static_dir = Path(__file__).resolve().parent / "static"
         self.httpd = ThreadingHTTPServer(("127.0.0.1", port), _ReviewHandler)
         self.httpd.review_server = self  # type: ignore[attr-defined]

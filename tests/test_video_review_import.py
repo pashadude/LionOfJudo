@@ -18,6 +18,14 @@ from pipeline.video_review_import import (
 
 
 class VideoReviewImportTests(TestCase):
+    def setUp(self):
+        self._probe_fps_patcher = patch(
+            "pipeline.video_review_import.probe_fps",
+            side_effect=self._fps_for_path,
+        )
+        self.mock_probe_fps = self._probe_fps_patcher.start()
+        self.addCleanup(self._probe_fps_patcher.stop)
+
     @patch("pipeline.video_review_import.subprocess.run")
     def test_side_by_side_maps_iphone_with_affine_setpts(self, mock_run):
         def create_output(command, **_kwargs):
@@ -228,6 +236,53 @@ class VideoReviewImportTests(TestCase):
             )
             self.assertTrue((root / "session" / "analysis" / "frame_metrics.json").exists())
             self.assertTrue((root / "session" / "analysis" / "event_metrics.json").exists())
+
+    @patch("pipeline.video_review_import.run_pose_analysis")
+    @patch("pipeline.video_review_import.make_side_by_side")
+    @patch("pipeline.video_review_import.cut_clip")
+    def test_import_persists_probed_source_fps(
+        self, mock_cut, mock_composite, mock_pose
+    ):
+        with self._temporary_directory() as raw_root:
+            root = Path(raw_root)
+            sony, iphone = self._sources(root)
+            mock_cut.side_effect = self._touch_result
+            mock_composite.side_effect = self._touch_result
+            mock_pose.return_value = {
+                "fps": 29.97,
+                "frame_metrics": [],
+                "events": [],
+            }
+            with patch(
+                "pipeline.video_review_import.probe_duration",
+                side_effect=self._duration_for_path,
+            ):
+                review_path = import_session(
+                    sony, iphone, root / "session", self._anchors(), 20.0, (1, 2, 3, 4)
+                )
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            self.assertEqual(review["sony_fps"], 29.97)
+            self.assertEqual(review["iphone_fps"], 59.94)
+            self.assertGreaterEqual(self.mock_probe_fps.call_count, 2)
+
+    @patch("pipeline.video_review_import.run_pose_analysis", return_value=[])
+    def test_import_fails_visibly_when_sony_fps_is_missing(
+        self, _mock_pose
+    ):
+        with self._temporary_directory() as raw_root:
+            root = Path(raw_root)
+            sony, iphone = self._sources(root)
+            with patch(
+                "pipeline.video_review_import.probe_fps",
+                side_effect=ValueError("fps nije dostupan"),
+            ), patch(
+                "pipeline.video_review_import.probe_duration",
+                side_effect=self._duration_for_path,
+            ):
+                with self.assertRaisesRegex(ValueError, "Sony FPS"):
+                    import_session(
+                        sony, iphone, root / "session", self._anchors(), 20.0, (1, 2, 3, 4)
+                    )
 
     @patch("pipeline.video_review_import.run_pose_analysis", return_value=[])
     @patch("pipeline.video_review_import.make_side_by_side")
@@ -455,6 +510,10 @@ class VideoReviewImportTests(TestCase):
         if path.name == "session_side_by_side.mp4":
             return 20.0
         return 4.0
+
+    @staticmethod
+    def _fps_for_path(path):
+        return 29.97 if Path(path).suffix.lower() == ".mp4" else 59.94
 
     @staticmethod
     def _pose_frame(offset):

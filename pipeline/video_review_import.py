@@ -79,6 +79,19 @@ def _finite(value: object, field_name: str) -> float:
     return result
 
 
+def _probe_optional_fps(video: Path) -> float | None:
+    """Return a finite source FPS, or None when the optional probe is unavailable."""
+    try:
+        value = probe_fps(Path(video))
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        return None
+    try:
+        value = _finite(value, "fps")
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0.0 else None
+
+
 def _format_number(value: float) -> str:
     return format(float(value), ".12g")
 
@@ -416,7 +429,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _source_record(path: Path) -> dict[str, str]:
+def _source_record(path: Path) -> dict[str, Any]:
     path = Path(path).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"izvorni video ne postoji: {path}")
@@ -598,6 +611,8 @@ def import_session(
 
     sony_record = _source_record(sony)
     iphone_record = _source_record(iphone)
+    sony_fps = _probe_optional_fps(sony)
+    iphone_fps = _probe_optional_fps(iphone)
     sony_duration_s = _finite(probe_duration(sony), "sony_duration_s")
     iphone_duration_s = _finite(probe_duration(iphone), "iphone_duration_s")
     if sony_duration_s <= 0.0 or iphone_duration_s <= 0.0:
@@ -618,6 +633,16 @@ def import_session(
         frame_metrics = []
         pose_events = pose_result
         pose_summary = {}
+    if sony_fps is None:
+        fallback_fps = pose_summary.get("fps")
+        try:
+            sony_fps = _finite(fallback_fps, "sony_fps")
+        except (TypeError, ValueError):
+            sony_fps = None
+    if sony_fps is None or sony_fps <= 0.0:
+        raise ValueError("Sony FPS nije dostupan; uvoz ne može da potvrdi kadriranje")
+    sony_record["fps"] = sony_fps
+    iphone_record["fps"] = iphone_fps
     events = []
     for raw_event in pose_events:
         if hasattr(raw_event, "to_dict"):
@@ -756,6 +781,8 @@ def import_session(
         "sources": {"sony": sony_record, "iphone": iphone_record},
         "sony_duration_s": sony_duration_s,
         "iphone_duration_s": iphone_duration_s,
+        "sony_fps": sony_fps,
+        "iphone_fps": iphone_fps,
         "anchors": [anchor.to_dict() for anchor in anchor_values],
         "time_map": time_map.to_dict(),
         "injury_cutoff_s": injury_cutoff_s,

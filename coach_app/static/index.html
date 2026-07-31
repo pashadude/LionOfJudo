@@ -44,8 +44,8 @@
         </div>
         <div class="playback-toolbar" aria-label="Kontrole reprodukcije">
           <button class="icon-button" data-action="toggle-play" type="button" aria-label="Pokreni ili zaustavi" title="Pokreni ili zaustavi">▶</button>
-          <button class="icon-button" data-action="step-back" type="button" aria-label="Prethodni kadar" title="Prethodni kadar">◀|</button>
-          <button class="icon-button" data-action="step-forward" type="button" aria-label="Sledeći kadar" title="Sledeći kadar">|▶</button>
+          <button id="step-back" class="icon-button" data-action="step-back" type="button" aria-label="Prethodni kadar" title="Prethodni kadar" disabled>◀|</button>
+          <button id="step-forward" class="icon-button" data-action="step-forward" type="button" aria-label="Sledeći kadar" title="Sledeći kadar" disabled>|▶</button>
           <button class="icon-button" data-action="restart" type="button" aria-label="Vrati na početak događaja" title="Vrati na početak događaja">↺</button>
           <span id="time-readout" class="time-readout">0.00 s</span>
           <input id="master-seek" type="range" min="0" max="1" step="0.001" value="0" aria-label="Sony vremenska osa">
@@ -73,7 +73,7 @@
             <label class="wide">Napomena<textarea id="note" name="napomena" maxlength="2000" rows="4"></textarea></label>
           </div>
           <div class="form-actions">
-            <button id="save-button" class="button primary" type="submit">Sačuvaj</button>
+            <button id="save-button" class="button primary" type="submit" disabled>Sačuvaj</button>
             <button id="share-button" class="button secondary" type="button">Podeli</button>
             <button id="merge-button" class="button secondary" type="button" disabled title="Izaberite dva događaja">Spoji</button>
             <button id="delete-button" class="button danger" type="button" disabled title="Brisanje nije dostupno u ovom pregledu">Obriši</button>

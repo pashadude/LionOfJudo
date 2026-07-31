@@ -4,7 +4,7 @@
   const $ = (selector) => document.querySelector(selector);
   const sony = $("#sony-video");
   const iphone = $("#iphone-video");
-  const state = { review: null, selected: null, syncing: false };
+  const state = { review: null, selected: null, globalSonyTime: 0, syncing: false };
   const metricLabels = {
     brzina_ulaska_norm: "Brzina ulaska",
     rotacija_trupa_2d_dps: "Rotacija trupa (2D)",
@@ -23,32 +23,78 @@
     return Boolean(event && (event.prijavljen_povredni_dogadjaj || event.iskljuceno_iz_statistike || event.status === "povreda"));
   }
 
+  function clamp(value, lower, upper) {
+    return Math.max(lower, Math.min(upper, value));
+  }
+
   function sonyDuration() {
-    return Number(state.review?.sony_duration_s || sony.duration || 1);
+    const persisted = Number(state.review?.sony_duration_s);
+    if (Number.isFinite(persisted) && persisted > 0) return persisted;
+    const loaded = Number(sony.duration);
+    return Number.isFinite(loaded) && loaded > 0 ? loaded : 0;
+  }
+
+  function inverseIphoneTime(sonyTime, review = state.review) {
+    const map = review?.time_map || {};
+    const slope = Number(map.slope);
+    const intercept = Number(map.intercept);
+    if (!Number.isFinite(slope) || slope <= 0 || !Number.isFinite(intercept)) return 0;
+    return (sonyTime - intercept) / slope;
   }
 
   function iphoneTime(sonyTime) {
-    const map = state.review?.time_map || { slope: 1, intercept: 0 };
-    return (sonyTime - Number(map.intercept || 0)) / Number(map.slope || 1);
+    return inverseIphoneTime(sonyTime, state.review);
   }
 
-  function seekSony(value) {
-    const clamped = Math.max(0, Math.min(sonyDuration(), Number(value) || 0));
+  function eventSpan(event, startKey, endKey) {
+    const span = Number(event?.[endKey]) - Number(event?.[startKey]);
+    return Number.isFinite(span) && span > 0 ? span : 0;
+  }
+
+  function localTimesForGlobal(globalSonyTime, event, review = state.review) {
+    const duration = sonyDuration();
+    const boundedGlobal = clamp(Number(globalSonyTime) || 0, 0, duration);
+    const sonyStart = Number(event?.sony_start_s) || 0;
+    const iphoneStart = Number(event?.iphone_start_s) || 0;
+    const sonyLocalRaw = globalSonyTime - Number(event.sony_start_s || 0);
+    const iphoneLocalRaw = iphoneTime(globalSonyTime) - Number(event.iphone_start_s || 0);
+    const mappedIphoneTime = inverseIphoneTime(boundedGlobal, review);
+    const mappedSonyLocal = boundedGlobal - sonyStart;
+    const mappedIphoneLocal = mappedIphoneTime - iphoneStart;
+    return {
+      globalSonyTime: boundedGlobal,
+      sonyLocalTime: clamp(review === state.review ? sonyLocalRaw : mappedSonyLocal, 0, eventSpan(event, "sony_start_s", "sony_end_s")),
+      iphoneLocalTime: clamp(review === state.review ? iphoneLocalRaw : mappedIphoneLocal, 0, eventSpan(event, "iphone_start_s", "iphone_end_s")),
+    };
+  }
+
+  function globalSonyTimeForLocal(localSonyTime, event) {
+    return (Number(localSonyTime) || 0) + (Number(event?.sony_start_s) || 0);
+  }
+
+  function syncVideosFromGlobal(globalSonyTime) {
+    const event = state.selected;
+    if (!event) return;
+    const times = localTimesForGlobal(globalSonyTime, event);
+    state.globalSonyTime = times.globalSonyTime;
     state.syncing = true;
-    sony.currentTime = clamped;
-    const target = Math.max(0, iphoneTime(clamped));
-    if (Number.isFinite(target)) iphone.currentTime = target;
-    $("#master-seek").value = String(clamped);
+    sony.currentTime = times.sonyLocalTime;
+    iphone.currentTime = times.iphoneLocalTime;
     state.syncing = false;
+  }
+
+  function seekSony(globalSonyTime) {
+    syncVideosFromGlobal(globalSonyTime);
+    $("#master-seek").value = String(state.globalSonyTime);
     drawCharts();
     updateReadout();
   }
 
   function updateReadout() {
-    const time = Number(sony.currentTime || 0);
+    const time = Number(state.globalSonyTime || 0);
     $("#time-readout").textContent = `${time.toFixed(2)} s`;
     $("#master-seek").max = String(Math.max(1, sonyDuration()));
-    $("#master-seek").value = String(Math.min(sonyDuration(), time));
+    $("#master-seek").value = String(clamp(time, 0, sonyDuration()));
   }
 
   function mediaFor(event, camera) {
@@ -57,8 +103,23 @@
     return media[camera] || `/media/events/${encodeURIComponent(event.event_id)}/${camera}.mp4`;
   }
 
+  function updateEditor(event) {
+    const disabled = injury(event);
+    $("#suggested-technique").value = event.predlog_tehnike || "";
+    $("#confirmed-technique").value = event.potvrdena_tehnika || "";
+    $("#score").value = event.ocena == null ? "" : String(event.ocena);
+    $("#note").value = event.napomena || "";
+    $("#confirmed-technique").disabled = disabled;
+    $("#score").disabled = disabled;
+    $("#save-button").disabled = disabled;
+    const visibility = $("#visibility-state");
+    visibility.textContent = disabled ? "Prijavljen povredni događaj · Nedovoljno vidljivo" : "";
+    visibility.classList.toggle("warning", disabled);
+  }
+
   function selectEvent(event) {
     state.selected = event;
+    state.globalSonyTime = Number(event.sony_start_s) || 0;
     document.querySelectorAll("#event-list button").forEach((button) => {
       button.setAttribute("aria-current", button.dataset.eventId === event.event_id ? "true" : "false");
     });
@@ -66,18 +127,8 @@
     iphone.src = mediaFor(event, "iphone");
     sony.load();
     iphone.load();
-    seekSony(Number(event.sony_start_s || 0));
-    $("#suggested-technique").value = event.predlog_tehnike || "";
-    $("#confirmed-technique").value = event.potvrdena_tehnika || "";
-    $("#score").value = event.ocena == null ? "" : String(event.ocena);
-    $("#note").value = event.napomena || "";
-    const disabled = injury(event);
-    $("#confirmed-technique").disabled = disabled;
-    $("#score").disabled = disabled;
-    $("#save-button").disabled = false;
-    const visibility = $("#visibility-state");
-    visibility.textContent = disabled ? "Prijavljen povredni događaj · Nedovoljno vidljivo" : "";
-    visibility.classList.toggle("warning", disabled);
+    updateEditor(event);
+    seekSony(state.globalSonyTime);
     updateReadout();
     drawCharts();
   }
@@ -103,6 +154,29 @@
     if (events.length) selectEvent(events[0]);
   }
 
+  function sonyFps() {
+    const fps = Number(state.review?.sony_fps);
+    return Number.isFinite(fps) && fps > 0 ? fps : null;
+  }
+
+  function updateFrameControls() {
+    const disabled = sonyFps() === null;
+    [$("#step-back"), $("#step-forward")].forEach((button) => {
+      button.disabled = disabled;
+      button.title = disabled ? "FPS Sony nije dostupan; kadriranje je onemogućeno" : button.title;
+    });
+  }
+
+  function stepFrame(direction) {
+    const fps = sonyFps();
+    if (fps === null) {
+      status("FPS Sony nije dostupan; kadriranje je onemogućeno", true);
+      updateFrameControls();
+      return;
+    }
+    seekSony(state.globalSonyTime + direction / fps);
+  }
+
   function metricValue(point, key) {
     const value = point?.[key] ?? point?.metrics?.[key];
     return Number.isFinite(Number(value)) ? Number(value) : null;
@@ -113,6 +187,7 @@
     const width = Math.max(1, canvas.clientWidth);
     const height = Math.max(1, canvas.clientHeight);
     const ratio = Math.max(1, window.devicePixelRatio || 1);
+    const domain = Math.max(sonyDuration(), 1e-9);
     canvas.width = Math.round(width * ratio);
     canvas.height = Math.round(height * ratio);
     const ctx = canvas.getContext("2d");
@@ -141,13 +216,13 @@
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       samples.forEach((point, index) => {
-        const x = Math.max(0, Math.min(width, (point.time / sonyDuration()) * width));
-        const y = Math.max(0, Math.min(height, height - ((point.value - min) / (max - min)) * (height - 4) - 2));
+        const x = clamp((point.time / domain) * width, 0, width);
+        const y = clamp(height - ((point.value - min) / (max - min)) * (height - 4) - 2, 0, height);
         if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       });
       ctx.stroke();
     }
-    const cursorX = Math.max(0, Math.min(width, (Number(sony.currentTime || 0) / sonyDuration()) * width));
+    const cursorX = clamp((Number(state.globalSonyTime || 0) / domain) * width, 0, width);
     ctx.strokeStyle = "#9b2c2c";
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -161,10 +236,13 @@
   }
 
   async function saveAnnotation(event) {
-    const isInjury = injury(event);
+    if (injury(event)) {
+      status("Prijavljen povredni događaj je samo za čitanje", true);
+      return;
+    }
     const payload = {
-      potvrdena_tehnika: isInjury ? "" : $("#confirmed-technique").value,
-      ocena: isInjury ? null : Number($("#score").value),
+      potvrdena_tehnika: $("#confirmed-technique").value,
+      ocena: Number($("#score").value),
       napomena: $("#note").value,
     };
     const response = await fetch(`/api/events/${encodeURIComponent(event.event_id)}/annotation`, {
@@ -180,17 +258,27 @@
 
   $("#annotation-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!state.selected) return;
+    if (!state.selected || injury(state.selected)) return;
     try { await saveAnnotation(state.selected); } catch (error) { status(error.message, true); }
   });
   $("#master-seek").addEventListener("input", (event) => seekSony(event.target.value));
   $("[data-action='toggle-play']").addEventListener("click", () => {
-    if (sony.paused) { sony.play(); iphone.play(); } else { sony.pause(); iphone.pause(); }
+    if (sony.paused) sony.play().catch(() => {}); else sony.pause();
   });
-  $("[data-action='step-back']").addEventListener("click", () => seekSony(sony.currentTime - 1 / Number(state.review?.sony_fps || 30)));
-  $("[data-action='step-forward']").addEventListener("click", () => seekSony(sony.currentTime + 1 / Number(state.review?.sony_fps || 30)));
+  $("[data-action='step-back']").addEventListener("click", () => stepFrame(-1));
+  $("[data-action='step-forward']").addEventListener("click", () => stepFrame(1));
   $("[data-action='restart']").addEventListener("click", () => seekSony(Number(state.selected?.sony_start_s || 0)));
-  sony.addEventListener("timeupdate", () => { if (!state.syncing) { iphone.currentTime = Math.max(0, iphoneTime(sony.currentTime)); updateReadout(); drawCharts(); } });
+  sony.addEventListener("timeupdate", () => {
+    if (!state.syncing && state.selected) {
+      state.globalSonyTime = clamp(globalSonyTimeForLocal(sony.currentTime, state.selected), 0, sonyDuration());
+      const times = localTimesForGlobal(state.globalSonyTime, state.selected);
+      state.syncing = true;
+      iphone.currentTime = times.iphoneLocalTime;
+      state.syncing = false;
+      updateReadout();
+      drawCharts();
+    }
+  });
   sony.addEventListener("play", () => { if (iphone.paused) iphone.play().catch(() => {}); });
   sony.addEventListener("pause", () => { if (!iphone.paused) iphone.pause(); });
   $("#share-button").addEventListener("click", async () => {
@@ -210,6 +298,7 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Sinhronizacija nije uspela");
       state.review = result;
+      updateFrameControls();
       status("Sinhronizacija je potvrđena");
       drawCharts();
     } catch (error) { status(error.message, true); }
@@ -226,6 +315,7 @@
   }).then((review) => {
     state.review = review;
     $("#session-title").textContent = review.session_id || "Video pregled";
+    updateFrameControls();
     renderEvents();
     drawCharts();
   }).catch((error) => status(error.message, true));
