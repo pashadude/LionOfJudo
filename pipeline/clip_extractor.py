@@ -8,6 +8,7 @@ ruin the tight throw windows.
 """
 
 import subprocess
+from math import isfinite
 from pathlib import Path
 
 
@@ -45,6 +46,34 @@ def probe_duration(video: Path) -> float:
            "-of", "default=nw=1:nk=1", str(video)]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True)
     return float(out.stdout.strip())
+
+
+def verify_media_export(
+    video: Path,
+    expected_duration_s: float | None = None,
+    tolerance_s: float = 0.75,
+) -> float:
+    """Reject empty or unexpectedly short/long ffmpeg output."""
+    video = Path(video)
+    if not video.is_file() or video.stat().st_size == 0:
+        raise ValueError(f"izvoz medija je prazan: {video}")
+
+    duration = probe_duration(video)
+    if not isfinite(duration) or duration < 0.0:
+        raise ValueError(f"trajanje izvoza nije konacno: {video}")
+    if expected_duration_s is not None:
+        expected = float(expected_duration_s)
+        tolerance = float(tolerance_s)
+        if not isfinite(expected) or expected <= 0.0:
+            raise ValueError("ocekivano trajanje mora biti pozitivno i konacno")
+        if not isfinite(tolerance) or tolerance < 0.0:
+            raise ValueError("dozvoljeno odstupanje mora biti konacno i nenegativno")
+        if abs(duration - expected) > tolerance:
+            raise ValueError(
+                f"trajanje izvoza odstupa od prozora: {duration:.3f}s prema "
+                f"{expected:.3f}s"
+            )
+    return duration
 
 
 def probe_fps(video: Path) -> float:
