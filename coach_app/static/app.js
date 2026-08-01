@@ -220,6 +220,21 @@
     );
   }
 
+  function assessmentDraftIsValid() {
+    try {
+      trainerAssessmentPayload();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function updateLockAssessmentAvailability(disabled) {
+    $("#lock-assessment-button").disabled = disabled
+      || !hasSavedParticipants()
+      || !assessmentDraftIsValid();
+  }
+
   function populateParticipants(review) {
     const participants = review?.participants || {};
     const hasWrestlerName = Object.prototype.hasOwnProperty.call(participants, "wrestler_name");
@@ -233,7 +248,8 @@
     $("#confirmed-technique").disabled = disabled;
     $("#trainer-reason").disabled = disabled;
     $("#add-current-second").disabled = disabled;
-    $("#lock-assessment-button").disabled = disabled || !hasSavedParticipants();
+    $("#lock-assessment-button").disabled = disabled;
+    if (!disabled) updateLockAssessmentAvailability(false);
     document.querySelectorAll("input[name='visibility'], input[name='trainer-score']")
       .forEach((input) => { input.disabled = disabled; });
   }
@@ -728,6 +744,14 @@
       reason.value = `${reason.value.trimEnd()}${reason.value.trim() ? " " : ""}${marker}`;
     }
     updateCitationList();
+    updateLockAssessmentAvailability(false);
+  });
+
+  $("#trainer-assessment-form").addEventListener("input", () => {
+    updateLockAssessmentAvailability(false);
+  });
+  $("#trainer-assessment-form").addEventListener("change", () => {
+    updateLockAssessmentAvailability(false);
   });
 
   $("#session-participants-form").addEventListener("submit", async (formEvent) => {
@@ -752,7 +776,7 @@
       if (state.selected) {
         const lockedBeforeReveal = hasPreAiAssessment(state.selected)
           && !revealedAiEvaluation(state.selected);
-        $("#lock-assessment-button").disabled = injury(state.selected) || lockedBeforeReveal;
+        updateLockAssessmentAvailability(injury(state.selected) || lockedBeforeReveal);
       }
       status("Podaci sesije su sačuvani");
     } catch (error) {
