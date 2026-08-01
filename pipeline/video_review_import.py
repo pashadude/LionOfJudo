@@ -381,16 +381,7 @@ def run_pose_analysis(
         "selected_track_id": selected_track_id,
         "blue_seed_sony": seed,
         "athlete_seen": selected_seen,
-        "frame_metrics": [
-            metric.to_dict(
-                intensity_0_100=(
-                    None
-                    if energy[index] is None
-                    else min(100.0, max(0.0, float(energy[index]) * 100.0))
-                )
-            )
-            for index, metric in enumerate(metrics)
-        ],
+        "frame_metrics": [metric.to_dict() for metric in metrics],
         "motion_energy": json_safe(energy),
         "events": [
             {"event_id": f"e-{index:03d}", **event.to_dict()}

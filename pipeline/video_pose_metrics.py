@@ -7,7 +7,7 @@ power, acceleration, impact severity, or a medical outcome.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import atan2, degrees, isfinite
 from typing import Any, Iterable, Sequence
 
@@ -16,6 +16,8 @@ import numpy as np
 
 KPT_CONFIDENCE = 0.3
 MAX_INTERPOLATION_GAP = 5
+SPEED_CAP_NORM_S = 4.0
+ROTATION_CAP_DPS = 540.0
 LEFT_SHOULDER, RIGHT_SHOULDER = 5, 6
 LEFT_HIP, RIGHT_HIP = 11, 12
 LEFT_ANKLE, RIGHT_ANKLE = 15, 16
@@ -86,6 +88,8 @@ class FrameMetric:
     brzina_ulaska_norm_s: float | None
     rotation_2d_dps: float | None
     hip_level_norm: float | None
+    intensity_0_100: float | None
+    acceleration_norm_s2: float | None
 
     @property
     def shoulder_line_angle_deg(self) -> float | None:
@@ -119,33 +123,62 @@ class FrameMetric:
     def torso_length_px(self) -> float | None:
         return self.torso_length
 
-    def to_dict(self, *, intensity_0_100: float | None = None) -> dict[str, Any]:
-        """Return the canonical per-frame review schema.
+    def to_dict(self) -> dict[str, Any]:
+        """Return the rounded canonical per-frame review schema."""
+        def rounded(value: float | None, digits: int = 6) -> float | None:
+            return None if value is None else round(float(value), digits)
 
-        ``intensity_0_100`` is supplied by the session-level motion-energy
-        normalization so it stays aligned with this frame's timestamp.
-        """
-        if intensity_0_100 is not None:
-            intensity_0_100 = float(intensity_0_100)
-            if not isfinite(intensity_0_100) or not 0.0 <= intensity_0_100 <= 100.0:
-                raise ValueError("intensity_0_100 must be finite and within 0..100")
+        def rounded_point(
+            value: tuple[float, float] | None,
+        ) -> list[float] | None:
+            return None if value is None else [round(float(item), 6) for item in value]
+
         return json_safe({
             "frame_index": self.frame_index,
-            "timestamp_s": self.timestamp_s,
-            "hip_midpoint": list(self.hip_midpoint) if self.hip_midpoint else None,
-            "shoulder_midpoint": (
-                list(self.shoulder_midpoint) if self.shoulder_midpoint else None
-            ),
-            "torso_length": self.torso_length,
-            "shoulder_angle_deg": self.shoulder_angle_deg,
+            "timestamp_s": rounded(self.timestamp_s, 3),
+            "hip_midpoint": rounded_point(self.hip_midpoint),
+            "shoulder_midpoint": rounded_point(self.shoulder_midpoint),
+            "torso_length": rounded(self.torso_length),
+            "shoulder_angle_deg": rounded(self.shoulder_angle_deg),
             "vidljivo": self.vidljivo,
             "interpolirano": self.interpolirano,
-            "brzina_ulaska_norm": self.brzina_ulaska_norm_s,
-            "rotacija_trupa_2d_dps": self.rotation_2d_dps,
-            "promena_visine_kukova_norm": self.hip_level_norm,
-            "sirina_stava_norm": self.stance_width_norm,
-            "intenzitet_pokreta_0_100": intensity_0_100,
+            "brzina_ulaska_norm": rounded(self.brzina_ulaska_norm_s),
+            "rotacija_trupa_2d_dps": rounded(self.rotation_2d_dps),
+            "promena_visine_kukova_norm": rounded(self.hip_level_norm),
+            "sirina_stava_norm": rounded(self.stance_width_norm),
+            "intenzitet_pokreta_0_100": rounded(self.intensity_0_100),
+            "proxy_ubrzanja_norm_s2": rounded(self.acceleration_norm_s2),
         })
+
+
+def canonical_intensity_series(
+    speeds: Sequence[float | None],
+    rotations: Sequence[float | None],
+) -> list[float | None]:
+    """Return centered three-sample intensity using fixed v1 caps."""
+    if len(speeds) != len(rotations):
+        raise ValueError("speeds and rotations must have equal length")
+    raw_intensity: list[float | None] = []
+    for speed, rotation in zip(speeds, rotations):
+        if (speed is None or rotation is None
+                or not isfinite(float(speed)) or not isfinite(float(rotation))):
+            raw_intensity.append(None)
+            continue
+        speed_score = min(100.0, max(0.0, float(speed) / SPEED_CAP_NORM_S * 100.0))
+        rotation_score = min(
+            100.0, max(0.0, abs(float(rotation)) / ROTATION_CAP_DPS * 100.0)
+        )
+        raw_intensity.append(0.5 * speed_score + 0.5 * rotation_score)
+
+    smoothed: list[float | None] = []
+    for index, value in enumerate(raw_intensity):
+        if value is None:
+            smoothed.append(None)
+            continue
+        neighbours = raw_intensity[max(0, index - 1):index + 2]
+        finite = [sample for sample in neighbours if sample is not None]
+        smoothed.append(sum(finite) / len(finite))
+    return smoothed
 
 
 def _interpolate(values: list[Any]) -> tuple[list[Any], set[int]]:
@@ -274,10 +307,13 @@ def compute_pose_metrics(
         angle = angles[index]
         speed = None
         rotation = None
-        if index > 0 and hip is not None and hips[index - 1] is not None and torso:
-            speed = float(np.linalg.norm(hip - hips[index - 1]) / torso * fps_value)
-        if index > 0 and angle is not None and angles[index - 1] is not None:
-            rotation = float(_wrap_angle(angle - angles[index - 1]) * fps_value)
+        dt = times[index] - times[index - 1] if index > 0 else None
+        if (dt is not None and dt > 0.0 and hip is not None
+                and hips[index - 1] is not None and torso):
+            speed = float(np.linalg.norm(hip - hips[index - 1]) / torso / dt)
+        if (dt is not None and dt > 0.0 and angle is not None
+                and angles[index - 1] is not None):
+            rotation = float(_wrap_angle(angle - angles[index - 1]) / dt)
         hip_level = None
         if hip is not None and baseline is not None and torso:
             hip_level = float((hip[1] - baseline[1]) / torso)
@@ -296,8 +332,47 @@ def compute_pose_metrics(
             brzina_ulaska_norm_s=speed,
             rotation_2d_dps=rotation,
             hip_level_norm=hip_level,
+            intensity_0_100=None,
+            acceleration_norm_s2=None,
         ))
-    return metrics
+
+    smoothed = canonical_intensity_series(
+        [metric.brzina_ulaska_norm_s for metric in metrics],
+        [metric.rotation_2d_dps for metric in metrics],
+    )
+    accelerations: list[float | None] = []
+    previous_speed: tuple[float, float] | None = None
+    for metric in metrics:
+        speed = metric.brzina_ulaska_norm_s
+        if speed is None:
+            accelerations.append(None)
+            previous_speed = None
+            continue
+        acceleration = None
+        if previous_speed is not None:
+            speed_before, time_before = previous_speed
+            dt = metric.timestamp_s - time_before
+            if dt > 0.0:
+                acceleration = abs(speed - speed_before) / dt
+        accelerations.append(acceleration)
+        previous_speed = (speed, metric.timestamp_s)
+
+    return [
+        replace(
+            metric,
+            intensity_0_100=smoothed[index],
+            acceleration_norm_s2=accelerations[index],
+        )
+        for index, metric in enumerate(metrics)
+    ]
 
 
-__all__ = ["FrameMetric", "compute_pose_metrics", "json_safe", "wrap_angle"]
+__all__ = [
+    "FrameMetric",
+    "ROTATION_CAP_DPS",
+    "SPEED_CAP_NORM_S",
+    "canonical_intensity_series",
+    "compute_pose_metrics",
+    "json_safe",
+    "wrap_angle",
+]

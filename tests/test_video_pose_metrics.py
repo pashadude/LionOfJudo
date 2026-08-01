@@ -19,6 +19,20 @@ def pose(hip_x, hip_y, left_shoulder, right_shoulder):
 
 
 class PoseMetricsTests(unittest.TestCase):
+    def test_entry_speed_uses_actual_timestamp_delta(self):
+        frames = [
+            pose(0, 100, (-5, 80), (5, 80)),
+            pose(10, 100, (5, 80), (15, 80)),
+        ]
+
+        metrics = compute_pose_metrics(
+            frames,
+            fps=6.0,
+            timestamps=[10.0, 10.25],
+        )
+
+        self.assertEqual(metrics[1].brzina_ulaska_norm_s, 2.0)
+
     def test_entry_speed_is_torso_normalized(self):
         frames = [
             pose(0, 100, (-5, 80), (5, 80)),
@@ -39,6 +53,40 @@ class PoseMetricsTests(unittest.TestCase):
 
         self.assertAlmostEqual(metric.shoulder_angle_deg, -90.0)
         self.assertAlmostEqual(metric.rotation_2d_dps, -900.0)
+
+    def test_intensity_uses_fixed_v1_caps(self):
+        frames = [
+            pose(0, 100, (-10, 80), (10, 80)),
+            pose(8, 100, (8, 90), (8, 70)),
+        ]
+
+        metric = compute_pose_metrics(
+            frames,
+            fps=1.0,
+            timestamps=[0.0, 1.0],
+        )[1]
+
+        self.assertAlmostEqual(metric.intensity_0_100, 13.333333333333332)
+        self.assertAlmostEqual(
+            metric.to_dict()["intenzitet_pokreta_0_100"],
+            13.333333,
+        )
+
+    def test_serialized_acceleration_uses_precise_timestamp_delta(self):
+        metrics = compute_pose_metrics(
+            [
+                pose(0, 100, (-5, 80), (5, 80)),
+                pose(10, 100, (5, 80), (15, 80)),
+                pose(30, 100, (25, 80), (35, 80)),
+            ],
+            fps=6.0,
+            timestamps=[10.0, 10.0 + 1 / 6, 10.0 + 2 / 6],
+        )
+
+        payload = metrics[2].to_dict()
+
+        self.assertEqual(payload["timestamp_s"], 10.333)
+        self.assertEqual(payload["proxy_ubrzanja_norm_s2"], 18.0)
 
     def test_rejects_invalid_fps(self):
         with self.assertRaises(ValueError):
@@ -111,10 +159,12 @@ class PoseMetricsTests(unittest.TestCase):
             timestamps=[12.0, 12.0 + 1.0 / 3.0],
         )[1]
 
-        payload = metric.to_dict(intensity_0_100=37.5)
+        payload = metric.to_dict()
 
-        self.assertEqual(payload["timestamp_s"], 12.0 + 1.0 / 3.0)
-        self.assertEqual(payload["intenzitet_pokreta_0_100"], 37.5)
+        self.assertEqual(payload["timestamp_s"], 12.333)
+        self.assertEqual(payload["intenzitet_pokreta_0_100"], 20.963137)
+        self.assertEqual(payload["brzina_ulaska_norm"], 1.677051)
+        self.assertEqual(payload["promena_visine_kukova_norm"], -0.25)
         self.assertIsNotNone(payload["brzina_ulaska_norm"])
         self.assertIsNotNone(payload["rotacija_trupa_2d_dps"])
         self.assertIsNotNone(payload["promena_visine_kukova_norm"])
