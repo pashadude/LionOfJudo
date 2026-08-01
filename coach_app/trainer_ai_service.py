@@ -281,6 +281,7 @@ class TrainerAiService:
             review["event_metrics"],
             csv_text,
             markdown_text,
+            generated_at=self._now_iso(),
             staged_media=staged_media,
             removed_media_prefixes=removed_media_prefixes,
         )

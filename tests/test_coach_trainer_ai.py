@@ -154,8 +154,60 @@ class CoachTrainerAiTests(unittest.TestCase):
                 [],
                 "csv",
                 "markdown",
+                generated_at="2026-08-02T10:00:00+02:00",
             )
         self.assertIsNone(self.service.store.resolve_current().generation_id)
+
+    def test_store_publishes_six_artifacts_with_pointer_bound_exports(self):
+        snapshot = self.service.store.stage_and_activate(
+            self.review,
+            self.review["events"],
+            "csv",
+            "markdown",
+            generated_at="2026-08-02T10:00:00+02:00",
+        )
+
+        self.assertTrue(snapshot.review_path.is_file())
+        self.assertTrue(snapshot.event_metrics_path.is_file())
+        self.assertTrue(snapshot.csv_path.is_file())
+        self.assertTrue(snapshot.markdown_path.is_file())
+        self.assertTrue(snapshot.dataset_path.is_file())
+        self.assertTrue(snapshot.audit_path.is_file())
+        self.assertEqual(
+            json.loads(snapshot.dataset_path.read_text(encoding="utf-8"))["generation_id"],
+            snapshot.generation_id,
+        )
+        self.assertEqual(
+            json.loads(snapshot.audit_path.read_text(encoding="utf-8"))["generation_id"],
+            snapshot.generation_id,
+        )
+
+    def test_exporter_failure_keeps_previous_generation_active(self):
+        current = self.service.store.stage_and_activate(
+            self.review,
+            self.review["events"],
+            "csv",
+            "markdown",
+            generated_at="2026-08-02T10:00:00+02:00",
+        )
+
+        with patch(
+            "coach_app.review_bundle.render_trainer_exports",
+            side_effect=OSError("export failure"),
+        ):
+            with self.assertRaisesRegex(OSError, "export failure"):
+                self.service.store.stage_and_activate(
+                    self.review,
+                    self.review["events"],
+                    "csv",
+                    "markdown",
+                    generated_at="2026-08-02T10:00:01+02:00",
+                )
+
+        self.assertEqual(
+            self.service.store.resolve_current().generation_id,
+            current.generation_id,
+        )
 
     def test_media_response_uses_same_current_generation_as_review(self):
         replacement = self.root / "replacement.mp4"
@@ -165,6 +217,7 @@ class CoachTrainerAiTests(unittest.TestCase):
             self.review["events"],
             (self.root / "izvestaj.csv").read_text(encoding="utf-8"),
             (self.root / "izvestaj.md").read_text(encoding="utf-8"),
+            generated_at="2026-08-02T10:00:00+02:00",
             staged_media={"media/session_side_by_side.mp4": replacement},
         )
         server = self.start_server()
@@ -184,6 +237,7 @@ class CoachTrainerAiTests(unittest.TestCase):
                 self.review["events"],
                 "csv",
                 "markdown",
+                generated_at="2026-08-02T10:00:00+02:00",
             )
 
         copied = snapshot.root / "media" / "session_side_by_side.mp4"
@@ -482,6 +536,52 @@ class CoachTrainerAiTests(unittest.TestCase):
             self.assertIn("deterministicki-v1", report)
             self.assertIn("video_pose_proxy_v1", report)
             self.assertIn("sony_s", report)
+
+    def test_http_participants_update_publishes_dataset_and_audit(self):
+        server = self.start_server()
+
+        status, body = self.read_json(
+            server.base_url + "/api/session/participants",
+            method="PUT",
+            payload={"trainer_name": "Marko", "wrestler_name": "Dusan"},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["participants"]["wrestler_name"], "Dusan")
+        with urlopen(server.base_url + "/trener_dataset.json") as response:
+            self.assertEqual(response.status, 200)
+            dataset = json.loads(response.read())
+        with urlopen(server.base_url + "/trener_assessment_audit.json") as response:
+            self.assertEqual(response.status, 200)
+            audit = json.loads(response.read())
+        snapshot = self.service.store.resolve_current()
+        self.assertEqual(dataset["participants"]["wrestler_name"], "Dusan")
+        self.assertEqual(dataset["generation_id"], snapshot.generation_id)
+        self.assertEqual(audit["generation_id"], snapshot.generation_id)
+
+    def test_http_export_downloads_return_404_for_legacy_four_file_generation(self):
+        legacy_id = "a" * 32
+        legacy_root = self.root / ".review-generations" / legacy_id
+        (legacy_root / "analysis").mkdir(parents=True)
+        for source, destination in (
+            (self.root / "review.json", legacy_root / "review.json"),
+            (self.root / "izvestaj.csv", legacy_root / "izvestaj.csv"),
+            (self.root / "izvestaj.md", legacy_root / "izvestaj.md"),
+        ):
+            destination.write_bytes(source.read_bytes())
+        (legacy_root / "analysis" / "event_metrics.json").write_text(
+            json.dumps({"events": self.review["events"]}), encoding="utf-8"
+        )
+        (self.root / "current-generation.json").write_text(
+            json.dumps({"generation_id": legacy_id}), encoding="utf-8"
+        )
+        server = self.start_server()
+
+        for path in ("/trener_dataset.json", "/trener_assessment_audit.json"):
+            with self.subTest(path=path):
+                with self.assertRaises(HTTPError) as raised:
+                    urlopen(server.base_url + path)
+                self.assertEqual(raised.exception.code, 404)
 
     def test_http_denies_internal_review_and_analysis_paths(self):
         server = self.start_server()

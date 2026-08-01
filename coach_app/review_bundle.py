@@ -12,6 +12,7 @@ from typing import Any, Mapping
 import uuid
 import warnings
 
+from pipeline.trainer_dataset_export import render_trainer_exports
 from pipeline.video_review_storage import atomic_write_json, atomic_write_review
 
 
@@ -39,6 +40,14 @@ class GenerationSnapshot:
     @property
     def markdown_path(self) -> Path:
         return self.root / "izvestaj.md"
+
+    @property
+    def dataset_path(self) -> Path:
+        return self.root / "trener_dataset.json"
+
+    @property
+    def audit_path(self) -> Path:
+        return self.root / "trener_assessment_audit.json"
 
 
 class GenerationStore:
@@ -78,6 +87,7 @@ class GenerationStore:
         event_metrics: list[Mapping[str, Any]],
         csv_text: str,
         markdown_text: str,
+        generated_at: str,
         staged_media: Mapping[str, Path] | None = None,
         removed_media_prefixes: tuple[str, ...] = (),
     ) -> GenerationSnapshot:
@@ -110,6 +120,14 @@ class GenerationStore:
             )
             self._write_text(target / "izvestaj.csv", csv_text)
             self._write_text(target / "izvestaj.md", markdown_text)
+            dataset_text, audit_text = render_trainer_exports(
+                review,
+                generation_id=generation_id,
+                bundle_root=target,
+                generated_at=generated_at,
+            )
+            self._write_text(target / "trener_dataset.json", dataset_text)
+            self._write_text(target / "trener_assessment_audit.json", audit_text)
             self._fsync_directory(target / "analysis")
             self._fsync_directory(target)
             self._fsync_directory(self.generations_dir)

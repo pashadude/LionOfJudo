@@ -287,6 +287,16 @@ class _ReviewHandler(BaseHTTPRequestHandler):
                     snapshot.csv_path if path.endswith(".csv") else snapshot.markdown_path
                 )
                 self._serve_file(candidate, snapshot.root)
+            elif path in {"/trener_dataset.json", "/trener_assessment_audit.json"}:
+                snapshot = self.app.trainer_ai_service.store.resolve_current()
+                candidate = (
+                    snapshot.dataset_path
+                    if path == "/trener_dataset.json"
+                    else snapshot.audit_path
+                )
+                if not candidate.is_file():
+                    raise FileNotFoundError
+                self._serve_file(candidate, snapshot.root)
             elif path.startswith("/media/"):
                 relative = path.removeprefix("/media/")
                 snapshot = self.app.trainer_ai_service.store.resolve_current()
@@ -364,6 +374,13 @@ class _ReviewHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         path = unquote(urlsplit(self.path).path)
+        if path == "/api/session/participants":
+            try:
+                result = self.app.trainer_ai_service.save_participants(self._read_body())
+                self._send_json(HTTPStatus.OK, result)
+            except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         prefix = "/api/events/"
         if not path.startswith(prefix):
             self._error(HTTPStatus.NOT_FOUND, "resurs nije pronađen")
