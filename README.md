@@ -142,6 +142,8 @@ arduino-cli upload -p /dev/cu.usbmodem* --fqbn esp32:esp32:esp32s3:FlashSize=16M
 
 ## Usage
 
+Za kompletan lokalni tok rada sa Sony/iPhone snimcima, potvrdu ankera, presek povrede, sinhronizovano pregledanje i bezbednost izvora pogledaj [VIDEO_ONLY_REVIEW_WORKFLOW.md](docs/VIDEO_ONLY_REVIEW_WORKFLOW.md).
+
 ### One-time setup
 ```bash
 python3 -m venv .venv
