@@ -683,9 +683,22 @@ def import_session(
     event_threshold: float = 0.5,
 ) -> Path:
     """Import one Sony-master session and return its canonical review path."""
-    sony = Path(sony).expanduser().resolve()
-    iphone = Path(iphone).expanduser().resolve()
-    output_dir = Path(output_dir).expanduser().resolve()
+    sony_input = Path(os.path.abspath(Path(sony).expanduser()))
+    iphone_input = Path(os.path.abspath(Path(iphone).expanduser()))
+    output_input = Path(os.path.abspath(Path(output_dir).expanduser()))
+    sony = sony_input.resolve()
+    iphone = iphone_input.resolve()
+    output_dir = output_input.resolve()
+    for camera, logical_source, resolved_source in (
+        ("Sony", sony_input, sony),
+        ("iPhone", iphone_input, iphone),
+    ):
+        if logical_source.is_relative_to(output_input) or resolved_source.is_relative_to(
+            output_dir
+        ):
+            raise ValueError(
+                f"izvorni {camera} video mora biti izvan direktorijuma sesije"
+            )
     review_path = output_dir / "review.json"
     previous: dict[str, Any] | None = None
     if review_path.is_file():

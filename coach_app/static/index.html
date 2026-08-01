@@ -17,7 +17,10 @@
         <button id="sync-button" class="button secondary" type="button">Sinhronizacija</button>
         <span id="sync-lock-note" class="sync-lock-note" hidden>Zaključano posle uvoza</span>
       </div>
-      <a id="export-link" class="button secondary" href="/izvestaj.csv" download>Izvezi izveštaj</a>
+      <div class="report-downloads" aria-label="Preuzimanje izveštaja">
+        <a id="export-link" class="button secondary" href="/izvestaj.csv" download>Izvezi izveštaj (CSV)</a>
+        <a class="button secondary" href="/izvestaj.md" download>Izvezi izveštaj (Markdown)</a>
+      </div>
     </div>
   </header>
 

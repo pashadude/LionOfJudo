@@ -158,6 +158,51 @@ class VideoReviewImportTests(TestCase):
                     )
                 mock_run.assert_not_called()
 
+    @patch(
+        "pipeline.video_review_import.run_pose_analysis",
+        return_value=[
+            {
+                "event_id": "e-001",
+                "sony_start_s": 11.0,
+                "sony_end_s": 14.0,
+            }
+        ],
+    )
+    @patch("pipeline.video_review_import.make_side_by_side")
+    @patch("pipeline.video_review_import.cut_clip")
+    def test_import_rejects_source_inside_managed_session_directory(
+        self, mock_cut, mock_composite, mock_pose
+    ):
+        with self._temporary_directory() as raw_root:
+            root = Path(raw_root)
+            output_dir = root / "session"
+            sony = output_dir / "events" / "e-001" / "sony.mp4"
+            sony.parent.mkdir(parents=True)
+            sony.write_bytes(b"immutable sony source")
+            iphone = root / "iphone.mov"
+            iphone.write_bytes(b"immutable iphone source")
+            mock_cut.side_effect = self._touch_result
+            mock_composite.side_effect = self._touch_result
+
+            with patch(
+                "pipeline.video_review_import.probe_duration",
+                side_effect=self._duration_for_path,
+            ):
+                with self.assertRaisesRegex(ValueError, "izvan direktorijuma sesije"):
+                    import_session(
+                        sony,
+                        iphone,
+                        output_dir,
+                        self._anchors(),
+                        20.0,
+                        (1, 2, 3, 4),
+                    )
+
+            self.assertEqual(sony.read_bytes(), b"immutable sony source")
+            mock_pose.assert_not_called()
+            mock_cut.assert_not_called()
+            mock_composite.assert_not_called()
+
     def test_run_pose_analysis_uses_seeded_track_and_stops_at_cutoff(self):
         frames = [self._pose_frame(0.0), self._pose_frame(20.0), self._pose_frame(40.0)]
         capture = _FakeCapture(frames, fps=10.0)

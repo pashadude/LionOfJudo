@@ -25,6 +25,7 @@ h1 { margin-bottom: 0; font-size: 21px; line-height: 1.15; }
 h2 { margin-bottom: 0; font-size: 16px; }
 h3 { margin: 0 0 8px; font-size: 12px; font-weight: 650; }
 .top-actions, .form-actions, .playback-toolbar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.report-downloads { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .sync-state { display: grid; gap: 3px; }
 .sync-lock-note { color: var(--muted); font-size: 11px; text-align: center; }
 .button { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--surface); text-decoration: none; cursor: pointer; }
@@ -90,6 +91,8 @@ input:disabled, select:disabled, textarea:disabled { color: var(--muted); backgr
   .topbar > *, .top-actions, .sync-state { width: 100%; min-width: 0; }
   .top-actions { flex-wrap: wrap; }
   .top-actions > * { flex: 1 1 150px; }
+  .report-downloads { flex-wrap: wrap; }
+  .report-downloads .button { flex: 1 1 180px; }
   .status { padding-inline: 12px; }
   .video-grid, .charts-section, .form-grid { grid-template-columns: 1fr; }
   .video-section { padding: 10px; }

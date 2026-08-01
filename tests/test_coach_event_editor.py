@@ -240,6 +240,28 @@ class CoachEventEditorTests(unittest.TestCase):
         self.assertEqual(orphan["potvrdena_tehnika"], "O-soto-gari")
         self.assertFalse((self.root / "events" / "e-1").exists())
 
+    def test_delete_rejects_source_video_inside_managed_events_directory(self):
+        embedded_source = self.root / "events" / "e-1" / "sony.mp4"
+        embedded_source.parent.mkdir(parents=True)
+        embedded_source.write_bytes(b"embedded immutable sony")
+        review = json.loads(self.review_path.read_text(encoding="utf-8"))
+        review["sony_video"] = str(embedded_source)
+        review["sources"]["sony"]["path"] = str(embedded_source)
+        self.review_path.write_text(json.dumps(review), encoding="utf-8")
+        before = self.review_path.read_bytes()
+        server = self.start_server()
+
+        error = self.assert_http_error(
+            422,
+            server,
+            "/api/events/e-1",
+            method="DELETE",
+        )
+
+        self.assertIn("izvorni", error["error"].lower())
+        self.assertEqual(embedded_source.read_bytes(), b"embedded immutable sony")
+        self.assertEqual(self.review_path.read_bytes(), before)
+
     def test_invalid_or_overlapping_ranges_leave_review_unchanged(self):
         server = self.start_server()
         before = self.review_path.read_bytes()

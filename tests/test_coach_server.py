@@ -378,6 +378,14 @@ class CoachServerTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertTrue(response.read())
 
+    def test_static_ui_exposes_csv_and_markdown_report_downloads(self):
+        server = self.start_server()
+        with urlopen(server.base_url + "/") as response:
+            html = response.read().decode("utf-8")
+
+        self.assertIn('href="/izvestaj.csv"', html)
+        self.assertIn('href="/izvestaj.md"', html)
+
     def test_static_ui_contract_uses_global_cursor_and_requires_persisted_fps(self):
         app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
             encoding="utf-8"

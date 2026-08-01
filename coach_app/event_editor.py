@@ -86,6 +86,7 @@ class EventEditor:
     ) -> dict[str, Any]:
         with self.lock:
             original = load_review_json(self.review_path)
+            self._reject_sources_in_managed_events(original)
             review = copy.deepcopy(original)
             generated: set[str] = set()
             deleted: set[str] = set()
@@ -282,6 +283,14 @@ class EventEditor:
         }
 
     def _source_path(self, review: Mapping[str, Any], camera: str) -> Path:
+        path = self._configured_source_path(review, camera).resolve()
+        if not path.is_file():
+            raise MediaExportError(f"izvorni {camera} video nije dostupan")
+        return path
+
+    def _configured_source_path(
+        self, review: Mapping[str, Any], camera: str
+    ) -> Path:
         source = review.get("sources", {}).get(camera, {})
         value = source.get("path") if isinstance(source, Mapping) else None
         if not value:
@@ -289,10 +298,19 @@ class EventEditor:
         path = Path(str(value)).expanduser()
         if not path.is_absolute():
             path = self.session_dir / path
-        path = path.resolve()
-        if not path.is_file():
-            raise MediaExportError(f"izvorni {camera} video nije dostupan")
-        return path
+        return Path(os.path.abspath(path))
+
+    def _reject_sources_in_managed_events(self, review: Mapping[str, Any]) -> None:
+        events_root = (self.session_dir / "events").resolve()
+        for camera in ("sony", "iphone"):
+            logical_source = self._configured_source_path(review, camera)
+            resolved_source = logical_source.resolve()
+            if logical_source.is_relative_to(events_root) or resolved_source.is_relative_to(
+                events_root
+            ):
+                raise MediaExportError(
+                    f"izvorni {camera} video ne sme biti unutar upravljanog events direktorijuma"
+                )
 
     def _export_event(self, review: Mapping[str, Any], event: Mapping[str, Any], output: Path) -> None:
         windows = {
