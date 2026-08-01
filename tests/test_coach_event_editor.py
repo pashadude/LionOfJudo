@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from coach_app.server import create_server
+from pipeline.trainer_ai_state import migrate_trainer_ai_payload
 
 
 class CoachEventEditorTests(unittest.TestCase):
@@ -129,6 +131,23 @@ class CoachEventEditorTests(unittest.TestCase):
         self.addCleanup(lambda: self.stop_server(server, thread))
         return server
 
+    def upgrade_to_v3(self):
+        review = json.loads(self.review_path.read_text(encoding="utf-8"))
+        review["effective_analysis_fps"] = 2.0
+        for camera, source in (("sony", self.sony), ("iphone", self.iphone)):
+            review["sources"][camera].update(
+                {
+                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                    "size": source.stat().st_size,
+                }
+            )
+        review = migrate_trainer_ai_payload(review)
+        review["event_metrics"] = copy.deepcopy(review["events"])
+        self.review_path.write_text(
+            json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return review
+
     @staticmethod
     def stop_server(server, thread):
         server.shutdown()
@@ -196,6 +215,69 @@ class CoachEventEditorTests(unittest.TestCase):
         self.assertEqual(event["napomena"], "Sačuvana napomena.")
         self.assertEqual(self.fake_probe(self.root / "events" / "e-1" / "sony.mp4"), 1.5)
 
+    def test_bounds_change_starts_new_assessment_round(self):
+        legacy = self.upgrade_to_v3()
+        legacy_bytes = self.review_path.read_bytes()
+        server = self.start_server()
+        assessment = {
+            "status_vidljivosti": "dovoljno_vidljivo",
+            "potvrdena_tehnika": "Tai-otoshi",
+            "ocena": 4,
+            "razlog": "Na 8.500 s rotacija počinje pre završetka ulaska.",
+            "citirani_sony_trenuci_s": [8.5],
+        }
+        self.request_json(
+            server,
+            "/api/events/e-1/trainer-assessments",
+            method="POST",
+            payload=assessment,
+        )
+        self.request_json(
+            server,
+            "/api/events/e-1/ai-reveal",
+            method="POST",
+            payload={},
+        )
+        before_snapshot = server.trainer_ai_service.store.resolve_current()
+        before_review = json.loads(before_snapshot.review_path.read_text(encoding="utf-8"))
+        before_event = next(event for event in before_review["events"] if event["event_id"] == "e-1")
+        first_assessment = json.dumps(
+            before_event["trener_procene"][0], ensure_ascii=False, sort_keys=True
+        )
+        first_fingerprint = before_event["analysis_fingerprint"]
+
+        status, result = self.request_json(
+            server,
+            "/api/events/e-1/bounds",
+            method="PUT",
+            payload={"sony_start_s": 8.25, "sony_end_s": 9.75},
+        )
+
+        self.assertEqual(status, 200)
+        public_event = next(
+            event for event in result["review"]["events"] if event["event_id"] == "e-1"
+        )
+        self.assertEqual(public_event["event_revision"], 2)
+        self.assertNotEqual(public_event["analysis_fingerprint"], first_fingerprint)
+        self.assertNotIn("ai_procene", public_event)
+        self.assertNotIn("imu_eksperimentalno", public_event)
+        after_snapshot = server.trainer_ai_service.store.resolve_current()
+        self.assertNotEqual(after_snapshot.generation_id, before_snapshot.generation_id)
+        after_review = json.loads(after_snapshot.review_path.read_text(encoding="utf-8"))
+        after_event = next(event for event in after_review["events"] if event["event_id"] == "e-1")
+        self.assertEqual(len(after_event["ai_procene"]), 2)
+        self.assertEqual(len(after_event["trener_procene"]), 1)
+        self.assertEqual(
+            json.dumps(after_event["trener_procene"][0], ensure_ascii=False, sort_keys=True),
+            first_assessment,
+        )
+        self.assertIsNone(after_event["ai_procene"][-1]["ai_otkriven_u"])
+        self.assertIsNone(after_event["aktivna_trener_revizija"])
+        self.assertIsNone(after_event["aktivni_duel"])
+        self.assertEqual(self.fake_probe(after_snapshot.root / "events" / "e-1" / "sony.mp4"), 1.5)
+        self.assertEqual(self.review_path.read_bytes(), legacy_bytes)
+        self.assertEqual(legacy["events"][0]["event_revision"], 1)
+
     def test_split_then_merge_restores_bounds_and_preserves_left_annotation(self):
         server = self.start_server()
         _, split = self.request_json(
@@ -226,6 +308,92 @@ class CoachEventEditorTests(unittest.TestCase):
         self.assertEqual((event["sony_start_s"], event["sony_end_s"]), (8.0, 10.0))
         self.assertEqual(event["potvrdena_tehnika"], "O-soto-gari")
         self.assertNotIn(right_id, [item["event_id"] for item in merged["review"]["events"]])
+
+    def test_v3_split_keeps_history_only_on_left_and_resets_both_rounds(self):
+        self.upgrade_to_v3()
+        server = self.start_server()
+        self.request_json(
+            server,
+            "/api/events/e-1/trainer-assessments",
+            method="POST",
+            payload={
+                "status_vidljivosti": "dovoljno_vidljivo",
+                "potvrdena_tehnika": "Tai-otoshi",
+                "ocena": 4,
+                "razlog": "Na 8.500 s ulazak prethodi rotaciji.",
+                "citirani_sony_trenuci_s": [8.5],
+            },
+        )
+
+        status, result = self.request_json(
+            server,
+            "/api/events/e-1/split",
+            method="POST",
+            payload={"sony_split_s": 9.0},
+        )
+
+        self.assertEqual(status, 200)
+        snapshot = server.trainer_ai_service.store.resolve_current()
+        internal = json.loads(snapshot.review_path.read_text(encoding="utf-8"))
+        left = next(event for event in internal["events"] if event["event_id"] == "e-1")
+        right = next(
+            event
+            for event in internal["events"]
+            if event["event_id"] == result["created_event_id"]
+        )
+        self.assertEqual(left["event_revision"], 2)
+        self.assertEqual(len(left["trener_procene"]), 1)
+        self.assertEqual(len(left["ai_procene"]), 2)
+        self.assertIsNone(left["aktivna_trener_revizija"])
+        self.assertIsNone(left["aktivni_duel"])
+        self.assertEqual(right["event_revision"], 1)
+        self.assertEqual(right["trener_procene"], [])
+        self.assertEqual(right["procene_ai_predloga"], [])
+        self.assertEqual(len(right["ai_procene"]), 1)
+        self.assertIsNone(right["potvrdena_tehnika"])
+        self.assertIsNone(right["ocena"])
+
+    def test_v3_merge_is_rejected_after_either_event_has_trainer_history(self):
+        self.upgrade_to_v3()
+        server = self.start_server()
+        _, created = self.request_json(
+            server,
+            "/api/events",
+            method="POST",
+            payload={"sony_start_s": 10.5, "sony_end_s": 11.5},
+        )
+        created_id = created["created_event_id"]
+        created_event = next(
+            event for event in created["review"]["events"] if event["event_id"] == created_id
+        )
+        self.assertEqual(created_event["event_revision"], 1)
+        self.assertEqual(created_event["trener_procene"], [])
+        self.request_json(
+            server,
+            "/api/events/e-1/trainer-assessments",
+            method="POST",
+            payload={
+                "status_vidljivosti": "dovoljno_vidljivo",
+                "potvrdena_tehnika": "Tai-otoshi",
+                "ocena": 4,
+                "razlog": "Na 8.500 s ulazak prethodi rotaciji.",
+                "citirani_sony_trenuci_s": [8.5],
+            },
+        )
+        before = server.trainer_ai_service.store.resolve_current().generation_id
+
+        error = self.assert_http_error(
+            409,
+            server,
+            "/api/events/merge",
+            method="POST",
+            payload={"event_ids": ["e-1", created_id]},
+        )
+
+        self.assertIn("zaključanim", error["error"])
+        self.assertEqual(
+            server.trainer_ai_service.store.resolve_current().generation_id, before
+        )
 
     def test_delete_removes_normal_event_and_ledgers_its_annotation(self):
         server = self.start_server()

@@ -382,21 +382,99 @@ def _legacy_annotation(event: Mapping[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _effective_analysis_fps(review: Mapping[str, Any]) -> float:
+    fps = review.get("effective_analysis_fps")
+    if isinstance(fps, bool) or not isinstance(fps, (int, float)):
+        pose_analysis = review.get("pose_analysis")
+        fps = (
+            pose_analysis.get("effective_analysis_fps")
+            if isinstance(pose_analysis, Mapping)
+            else None
+        )
+    if isinstance(fps, bool) or not isinstance(fps, (int, float)):
+        raise ValueError("effective_analysis_fps nedostaje")
+    numeric = float(fps)
+    if not math.isfinite(numeric) or numeric <= 0.0:
+        raise ValueError("effective_analysis_fps mora biti pozitivan konačan broj")
+    return numeric
+
+
+def start_new_event_revision(
+    review: Mapping[str, Any], event: dict[str, Any]
+) -> dict[str, Any]:
+    """Start an independent assessment round when evaluator inputs change."""
+    if _is_injury(event):
+        raise ValueError("povredni događaj nema AI/trener reviziju")
+    frames = review.get("frame_metrics", [])
+    if not isinstance(frames, list):
+        raise TypeError("frame_metrics mora biti JSON lista")
+    fps = _effective_analysis_fps(review)
+    fingerprint = compute_analysis_fingerprint(review, event)
+    previous_revision = event.get("event_revision")
+    previous_fingerprint = event.get("analysis_fingerprint")
+    if previous_revision is not None:
+        previous_revision = _positive_int(previous_revision, "event_revision")
+    if previous_fingerprint is not None:
+        _fingerprint(previous_fingerprint, "analysis_fingerprint")
+
+    for key in ("ai_procene", "trener_procene", "procene_ai_predloga"):
+        value = event.setdefault(key, [])
+        if not isinstance(value, list):
+            raise TypeError(f"{key} mora biti JSON lista")
+    event.setdefault("legacy_annotations", [])
+
+    active_exists = any(
+        isinstance(row, Mapping)
+        and row.get("event_revision") == previous_revision
+        and row.get("analysis_fingerprint") == fingerprint
+        and row.get("evaluator_id") == EVALUATOR_ID
+        for row in event["ai_procene"]
+    )
+    if previous_revision is not None and previous_fingerprint == fingerprint and active_exists:
+        if "imu_eksperimentalno" not in event:
+            evaluated = evaluate_event(
+                event,
+                frames,
+                effective_analysis_fps=fps,
+                analysis_fingerprint=fingerprint,
+            )
+            event["imu_eksperimentalno"] = evaluated["imu_eksperimentalno"]
+        event.setdefault("aktivna_trener_revizija", None)
+        event.setdefault("aktivni_duel", None)
+        validate_trainer_ai_event(event)
+        return event
+
+    revision = 1 if previous_revision is None else previous_revision + 1
+    event["event_revision"] = revision
+    event["analysis_fingerprint"] = fingerprint
+    evaluated = evaluate_event(
+        event,
+        frames,
+        effective_analysis_fps=fps,
+        analysis_fingerprint=fingerprint,
+    )
+    event["imu_eksperimentalno"] = evaluated.pop("imu_eksperimentalno")
+    event["ai_procene"].append(
+        {
+            "event_revision": revision,
+            **evaluated,
+            "ai_otkriven_u": None,
+        }
+    )
+    event["aktivna_trener_revizija"] = None
+    event["aktivni_duel"] = None
+    event["ocena"] = None
+    validate_trainer_ai_event(event)
+    return event
+
+
 def migrate_trainer_ai_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Add v3 event histories without upgrading legacy labels to pre-AI truth."""
     migrated = copy.deepcopy(dict(payload))
     events = migrated.get("events")
-    frames = migrated.get("frame_metrics", [])
-    fps = migrated.get("effective_analysis_fps")
     if not isinstance(events, list):
         raise TypeError("events mora biti JSON lista")
-    if not isinstance(frames, list):
-        raise TypeError("frame_metrics mora biti JSON lista")
-    if isinstance(fps, bool) or not isinstance(fps, (int, float)):
-        pose_analysis = migrated.get("pose_analysis")
-        fps = pose_analysis.get("effective_analysis_fps") if isinstance(pose_analysis, Mapping) else None
-    if isinstance(fps, bool) or not isinstance(fps, (int, float)):
-        raise ValueError("effective_analysis_fps nedostaje")
+    _effective_analysis_fps(migrated)
 
     migrated["version"] = 3
     for event in events:
@@ -412,60 +490,9 @@ def migrate_trainer_ai_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             event["legacy_annotations"] = [] if legacy is None else [legacy]
         elif not isinstance(existing_legacy, list):
             raise TypeError("legacy_annotations mora biti JSON lista")
-        event["ocena"] = None
-        event_revision = event.get("event_revision", 1)
-        event_revision = _positive_int(event_revision, "event_revision")
-        existing_fingerprint = event.get("analysis_fingerprint")
-        if existing_fingerprint is not None:
-            _fingerprint(existing_fingerprint, "analysis_fingerprint")
-        fingerprint = compute_analysis_fingerprint(migrated, event)
-        if existing_fingerprint is not None and existing_fingerprint != fingerprint:
-            event_revision += 1
-            event["aktivna_trener_revizija"] = None
-            event["aktivni_duel"] = None
-        event["event_revision"] = event_revision
-        event["analysis_fingerprint"] = fingerprint
-        ai_rows = event.setdefault("ai_procene", [])
-        if not isinstance(ai_rows, list):
-            raise TypeError("ai_procene mora biti JSON lista")
-        current = next(
-            (
-                row for row in ai_rows
-                if isinstance(row, dict)
-                and row.get("event_revision") == event_revision
-                and row.get("analysis_fingerprint") == fingerprint
-                and row.get("evaluator_id") == EVALUATOR_ID
-            ),
-            None,
-        )
-        if current is None:
-            evaluated = evaluate_event(
-                event,
-                frames,
-                effective_analysis_fps=float(fps),
-                analysis_fingerprint=fingerprint,
-            )
-            imu = evaluated.pop("imu_eksperimentalno")
-            current = {
-                "event_revision": event_revision,
-                **evaluated,
-                "ai_otkriven_u": None,
-            }
-            ai_rows.append(current)
-            event["imu_eksperimentalno"] = imu
-        elif "imu_eksperimentalno" not in event:
-            evaluated = evaluate_event(
-                event,
-                frames,
-                effective_analysis_fps=float(fps),
-                analysis_fingerprint=fingerprint,
-            )
-            event["imu_eksperimentalno"] = evaluated["imu_eksperimentalno"]
-        event.setdefault("trener_procene", [])
-        event.setdefault("procene_ai_predloga", [])
-        event.setdefault("aktivna_trener_revizija", None)
-        event.setdefault("aktivni_duel", None)
-        validate_trainer_ai_event(event)
+        if "event_revision" not in event:
+            event["ocena"] = None
+        start_new_event_revision(migrated, event)
     return migrated
 
 
@@ -473,5 +500,6 @@ __all__ = [
     "active_ai_evaluation",
     "active_trainer_assessment",
     "migrate_trainer_ai_payload",
+    "start_new_event_revision",
     "validate_trainer_ai_event",
 ]

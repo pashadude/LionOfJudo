@@ -183,6 +183,31 @@ class CoachServerTests(unittest.TestCase):
         self.assertIn("Stabilan, ulaz \\| kukovi", markdown)
         self.assertIn("Nedovoljno vidljivo", markdown)
 
+    def test_annotation_allows_unscored_trainer_confirmation(self):
+        server = self.start_server()
+        body = json.dumps(
+            {
+                "potvrdena_tehnika": "Morote-seoi-nage",
+                "ocena": None,
+                "napomena": "Naziv potvrdio trener; ocena čeka trenera.",
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        status, saved = self.read_json(
+            server.base_url + "/api/events/e-1/annotation",
+            method="PUT",
+            body=body,
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(saved["potvrdena_tehnika"], "Morote-seoi-nage")
+        self.assertIsNone(saved["ocena"])
+        self.assertEqual(saved["status"], "trener")
+        with (self.root / "izvestaj.csv").open(encoding="utf-8", newline="") as handle:
+            row = next(csv.DictReader(handle))
+        self.assertEqual(row["Ocena"], "")
+
     def test_save_annotation_is_strict_and_atomic(self):
         payload = {
             "potvrdena_tehnika": "Uki-goshi",

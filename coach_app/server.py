@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import threading
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,6 +24,7 @@ from pipeline.video_review_reports import event_is_injury, write_reports
 from pipeline.video_review_storage import atomic_write_review, load_review_json
 
 from coach_app.event_editor import EventConflictError, EventEditor, MediaExportError
+from coach_app.trainer_ai_service import TrainerAiService, _default_clock
 
 
 ANNOTATION_FIELDS = {"potvrdena_tehnika", "ocena", "napomena"}
@@ -59,8 +61,10 @@ def _validate_annotation(event_id: object, payload: object, event: Mapping[str, 
         raise ValueError("potvrđena tehnika mora biti tekst do 120 znakova")
     if not isinstance(note, str) or len(note) > MAX_NOTE_LENGTH:
         raise ValueError("napomena mora biti tekst do 2000 znakova")
-    if isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 5:
-        raise ValueError("ocena mora biti ceo broj od 1 do 5")
+    if score is not None and (
+        isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 5
+    ):
+        raise ValueError("ocena mora biti prazna ili ceo broj od 1 do 5")
     return {
         "potvrdena_tehnika": technique,
         "ocena": score,
@@ -87,6 +91,7 @@ def save_annotation(review_path: Path, event_id: str, payload: dict[str, Any]) -
         raise ValueError("događaj nije pronađen")
     annotation = _validate_annotation(event_id, payload, selected)
     selected.update(annotation)
+    selected["status"] = "trener"
     event_metrics = review.get("event_metrics")
     if isinstance(event_metrics, list):
         metric_event = next(
@@ -98,6 +103,7 @@ def save_annotation(review_path: Path, event_id: str, payload: dict[str, Any]) -
         )
         if metric_event is not None:
             metric_event.update(annotation)
+            metric_event["status"] = "trener"
     _atomic_json(review_path, review)
     _write_report(review_path, review)
     return dict(selected)
@@ -151,6 +157,7 @@ class ReviewServer:
         *,
         clip_exporter: Callable[..., Path] = cut_clip,
         media_probe: Callable[[Path], float] = probe_duration,
+        clock: Callable[[], datetime] = _default_clock,
     ):
         self.session_dir = Path(session_dir).expanduser().resolve()
         if not self.session_dir.is_dir():
@@ -158,14 +165,25 @@ class ReviewServer:
         self.review_path = self.session_dir / "review.json"
         if not self.review_path.is_file():
             raise ValueError("sesija nema review.json")
-        _write_report(self.review_path, _strict_load(self.review_path))
+        if not all(
+            (self.session_dir / name).is_file()
+            for name in ("izvestaj.csv", "izvestaj.md")
+        ):
+            _write_report(self.review_path, _strict_load(self.review_path))
         self.static_dir = Path(__file__).resolve().parent / "static"
         self.mutation_lock = threading.RLock()
+        self.trainer_ai_service = TrainerAiService(
+            self.session_dir,
+            clock=clock,
+            mutation_lock=self.mutation_lock,
+        )
         self.event_editor = EventEditor(
             self.session_dir,
             lock=self.mutation_lock,
             clip_exporter=clip_exporter,
             media_probe=media_probe,
+            review_loader=self.trainer_ai_service.load_review,
+            generation_activator=self.trainer_ai_service.activate_review,
         )
         self.httpd = ThreadingHTTPServer(("127.0.0.1", port), _ReviewHandler)
         self.httpd.review_server = self  # type: ignore[attr-defined]
@@ -188,12 +206,14 @@ def create_server(
     *,
     clip_exporter: Callable[..., Path] = cut_clip,
     media_probe: Callable[[Path], float] = probe_duration,
+    clock: Callable[[], datetime] = _default_clock,
 ) -> ReviewServer:
     return ReviewServer(
         Path(session_dir),
         port,
         clip_exporter=clip_exporter,
         media_probe=media_probe,
+        clock=clock,
     )
 
 
@@ -233,19 +253,21 @@ class _ReviewHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = unquote(urlsplit(self.path).path)
         try:
+            if self._is_internal_path(path):
+                raise FileNotFoundError
             if path in {"/", "/index.html"}:
                 self._serve_file(self.app.static_dir / "index.html", self.app.static_dir, "text/html; charset=utf-8")
             elif path.startswith("/static/"):
                 self._serve_file(self.app.static_dir / path.removeprefix("/static/"), self.app.static_dir)
             elif path == "/api/session":
-                review = _strict_load(self.app.review_path)
+                review = self.app.trainer_ai_service.public_review()
                 review["sync_locked"] = _sync_is_locked(review, self.app.session_dir)
                 self._send_json(HTTPStatus.OK, review)
             elif path.startswith("/api/events/"):
                 event_id = path.removeprefix("/api/events/")
                 if not event_id or "/" in event_id:
                     raise FileNotFoundError
-                review = _strict_load(self.app.review_path)
+                review = self.app.trainer_ai_service.public_review()
                 event = next(
                     (event for event in review.get("events", []) if isinstance(event, dict) and event.get("event_id") == event_id),
                     None,
@@ -253,15 +275,22 @@ class _ReviewHandler(BaseHTTPRequestHandler):
                 if event is None:
                     raise FileNotFoundError
                 self._send_json(HTTPStatus.OK, event)
+            elif path in {"/izvestaj.csv", "/izvestaj.md"}:
+                snapshot = self.app.trainer_ai_service.store.resolve_current()
+                candidate = (
+                    snapshot.csv_path if path.endswith(".csv") else snapshot.markdown_path
+                )
+                self._serve_file(candidate, snapshot.root)
             elif path.startswith("/media/"):
                 relative = path.removeprefix("/media/")
                 if ".." in Path(relative).parts:
                     raise FileNotFoundError
+                snapshot = self.app.trainer_ai_service.store.resolve_current()
                 if relative.startswith(("events/", "previews/", "analysis/")):
-                    candidate = self.app.session_dir / relative
+                    candidate = snapshot.root / relative
                 else:
-                    candidate = self.app.session_dir / "media" / relative
-                self._serve_file(candidate, self.app.session_dir)
+                    candidate = snapshot.root / "media" / relative
+                self._serve_file(candidate, snapshot.root)
             else:
                 relative = path.removeprefix("/")
                 self._serve_file(self.app.session_dir / relative, self.app.session_dir)
@@ -272,6 +301,17 @@ class _ReviewHandler(BaseHTTPRequestHandler):
         except PermissionError:
             self._error(HTTPStatus.NOT_FOUND, "resurs nije pronađen")
 
+    @staticmethod
+    def _is_internal_path(path: str) -> bool:
+        return bool(
+            path == "/review.json"
+            or path == "/current-generation.json"
+            or path == "/analysis"
+            or path.startswith("/analysis/")
+            or path == "/.review-generations"
+            or path.startswith("/.review-generations/")
+        )
+
     def do_PUT(self) -> None:
         path = unquote(urlsplit(self.path).path)
         prefix = "/api/events/"
@@ -279,7 +319,11 @@ class _ReviewHandler(BaseHTTPRequestHandler):
             self._error(HTTPStatus.NOT_FOUND, "resurs nije pronađen")
             return
         suffix = next(
-            (candidate for candidate in ("/annotation", "/bounds") if path.endswith(candidate)),
+            (
+                candidate
+                for candidate in ("/annotation", "/bounds", "/ai-feedback")
+                if path.endswith(candidate)
+            ),
             None,
         )
         if suffix is None:
@@ -292,10 +336,25 @@ class _ReviewHandler(BaseHTTPRequestHandler):
         try:
             payload = self._read_body()
             if suffix == "/annotation":
-                with self.app.mutation_lock:
-                    result = save_annotation(self.app.review_path, event_id, payload)  # type: ignore[arg-type]
+                snapshot = self.app.trainer_ai_service.store.resolve_current()
+                current = _strict_load(snapshot.review_path)
+                if current.get("version", 1) >= 3:
+                    self.app.trainer_ai_service.save_draft_annotation(event_id, payload)
+                else:
+                    save_annotation(snapshot.review_path, event_id, payload)  # type: ignore[arg-type]
+                result = self.app.trainer_ai_service.public_event(event_id)
+            elif suffix == "/ai-feedback":
+                internal = self.app.trainer_ai_service.save_ai_feedback(event_id, payload)
+                result = {
+                    "event": self.app.trainer_ai_service.public_event(event_id),
+                    "assessment": internal["assessment"],
+                }
             else:
-                result = self.app.event_editor.update_bounds(event_id, payload)
+                internal = self.app.event_editor.update_bounds(event_id, payload)
+                result = dict(internal)
+                result["review"] = self.app.trainer_ai_service.project_review(
+                    internal["review"]
+                )
             self._send_json(HTTPStatus.OK, result)
         except MediaExportError as exc:
             self._error(HTTPStatus.UNPROCESSABLE_ENTITY, str(exc))
@@ -333,18 +392,58 @@ class _ReviewHandler(BaseHTTPRequestHandler):
                     review["sync_locked"] = False
                     _atomic_json(self.app.review_path, review)
                     _write_report(self.app.review_path, review)
-                self._send_json(HTTPStatus.OK, review)
+                self._send_json(
+                    HTTPStatus.OK,
+                    self.app.trainer_ai_service.project_review(review),
+                )
             elif path == "/api/events":
                 result = self.app.event_editor.create(self._read_body())
+                result["review"] = self.app.trainer_ai_service.project_review(
+                    result["review"]
+                )
                 self._send_json(HTTPStatus.CREATED, result)
             elif path == "/api/events/merge":
                 result = self.app.event_editor.merge(self._read_body())
+                result["review"] = self.app.trainer_ai_service.project_review(
+                    result["review"]
+                )
                 self._send_json(HTTPStatus.OK, result)
+            elif path.startswith("/api/events/") and path.endswith("/trainer-assessments"):
+                event_id = path[len("/api/events/"):-len("/trainer-assessments")]
+                if not event_id or "/" in event_id:
+                    raise ValueError("event ID nije validan")
+                internal = self.app.trainer_ai_service.lock_assessment(
+                    event_id, self._read_body()
+                )
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "event": self.app.trainer_ai_service.public_event(event_id),
+                        "assessment": internal["assessment"],
+                    },
+                )
+            elif path.startswith("/api/events/") and path.endswith("/ai-reveal"):
+                event_id = path[len("/api/events/"):-len("/ai-reveal")]
+                if not event_id or "/" in event_id:
+                    raise ValueError("event ID nije validan")
+                if self._read_body() != {}:
+                    raise ValueError("AI reveal zahtev mora biti prazan JSON objekat")
+                internal = self.app.trainer_ai_service.reveal_ai(event_id)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "event": self.app.trainer_ai_service.public_event(event_id),
+                        "assessment": internal["assessment"],
+                    },
+                )
             elif path.startswith("/api/events/") and path.endswith("/split"):
                 event_id = path[len("/api/events/"):-len("/split")]
                 if not event_id or "/" in event_id:
                     raise ValueError("event ID nije validan")
                 result = self.app.event_editor.split(event_id, self._read_body())
+                result["review"] = self.app.trainer_ai_service.project_review(
+                    result["review"]
+                )
                 self._send_json(HTTPStatus.OK, result)
             else:
                 self._error(HTTPStatus.NOT_FOUND, "resurs nije pronađen")
@@ -365,10 +464,11 @@ class _ReviewHandler(BaseHTTPRequestHandler):
             self._error(HTTPStatus.NOT_FOUND, "resurs nije pronađen")
             return
         try:
-            self._send_json(
-                HTTPStatus.OK,
-                self.app.event_editor.delete(event_id),
+            result = self.app.event_editor.delete(event_id)
+            result["review"] = self.app.trainer_ai_service.project_review(
+                result["review"]
             )
+            self._send_json(HTTPStatus.OK, result)
         except MediaExportError as exc:
             self._error(HTTPStatus.UNPROCESSABLE_ENTITY, str(exc))
         except EventConflictError as exc:

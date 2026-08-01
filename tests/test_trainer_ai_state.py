@@ -1,10 +1,12 @@
 import copy
 import unittest
+from unittest.mock import patch
 
 from pipeline.trainer_ai_state import (
     active_ai_evaluation,
     active_trainer_assessment,
     migrate_trainer_ai_payload,
+    start_new_event_revision,
     validate_trainer_ai_event,
 )
 
@@ -263,6 +265,35 @@ class TrainerAiStateTests(unittest.TestCase):
         self.assertIsNone(event["ai_procene"][-1]["ai_otkriven_u"])
         self.assertIsNone(event["aktivna_trener_revizija"])
         self.assertIsNone(event["aktivni_duel"])
+
+    def test_revision_helper_is_noop_until_a_fingerprinted_input_changes(self):
+        review = migrate_trainer_ai_payload(legacy_review_fixture())
+        event = review["events"][0]
+        before = copy.deepcopy(event)
+
+        start_new_event_revision(review, event)
+
+        self.assertEqual(event, before)
+        event["selected_track_id"] = 8
+        start_new_event_revision(review, event)
+        self.assertEqual(event["event_revision"], 2)
+        self.assertEqual(len(event["ai_procene"]), 2)
+        self.assertIsNone(event["ai_procene"][-1]["ai_otkriven_u"])
+
+    def test_pose_and_evaluator_versions_each_start_a_new_round(self):
+        review = migrate_trainer_ai_payload(legacy_review_fixture())
+        event = review["events"][0]
+
+        with patch("pipeline.trainer_ai_evaluator.POSE_METRICS_ID", "video-pose-metrics-v2"):
+            start_new_event_revision(review, event)
+        self.assertEqual(event["event_revision"], 2)
+
+        with patch(
+            "pipeline.trainer_ai_evaluator.EVALUATOR_ID", "deterministicki-v2"
+        ), patch("pipeline.trainer_ai_state.EVALUATOR_ID", "deterministicki-v2"):
+            start_new_event_revision(review, event)
+            self.assertEqual(event["event_revision"], 3)
+            self.assertEqual(event["ai_procene"][-1]["evaluator_id"], "deterministicki-v2")
 
     def test_injury_event_rejects_assessment_collections(self):
         injury = migrate_trainer_ai_payload(legacy_review_fixture())["events"][1]

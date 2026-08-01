@@ -7,11 +7,13 @@ import math
 import os
 from pathlib import Path
 import shutil
+import tempfile
 import threading
 from typing import Any, Callable, Mapping
 import uuid
 
 from pipeline.clip_extractor import cut_clip, probe_duration, verify_media_export
+from pipeline.trainer_ai_state import start_new_event_revision
 from pipeline.video_review_contract import validate_review_payload
 from pipeline.video_review_reports import event_is_injury, write_reports
 from pipeline.video_review_metrics import summarize_event_metrics
@@ -59,12 +61,16 @@ class EventEditor:
         lock: threading.RLock | None = None,
         clip_exporter: Callable[..., Path] = cut_clip,
         media_probe: Callable[[Path], float] = probe_duration,
+        review_loader: Callable[[], dict[str, Any]] | None = None,
+        generation_activator: Callable[..., None] | None = None,
     ) -> None:
         self.session_dir = Path(session_dir).resolve()
         self.review_path = self.session_dir / "review.json"
         self.lock = lock or threading.RLock()
         self.clip_exporter = clip_exporter
         self.media_probe = media_probe
+        self.review_loader = review_loader or (lambda: load_review_json(self.review_path))
+        self.generation_activator = generation_activator
 
     def create(self, payload: object) -> dict[str, Any]:
         return self._apply("create", payload)
@@ -85,7 +91,7 @@ class EventEditor:
         self, operation: str, payload: object, *, event_id: str | None = None
     ) -> dict[str, Any]:
         with self.lock:
-            original = load_review_json(self.review_path)
+            original = self.review_loader()
             self._reject_sources_in_managed_events(original)
             review = copy.deepcopy(original)
             generated: set[str] = set()
@@ -114,15 +120,20 @@ class EventEditor:
                 if not float(selected["sony_start_s"]) < split_s < float(selected["sony_end_s"]):
                     raise ValueError("vreme podele mora biti unutar događaja")
                 created_event_id = self._next_event_id(review)
-                right = copy.deepcopy(selected)
+                original_end = float(selected["sony_end_s"])
                 selected["sony_end_s"] = split_s
-                right["event_id"] = created_event_id
-                right["sony_start_s"] = split_s
-                right["status"] = "trener"
-                for key in ANNOTATION_FIELDS:
-                    right[key] = None
-                for key in AUTO_VOICE_FIELDS:
-                    right[key] = 0.0 if key == "pouzdanost_glasa" else None
+                if review.get("version", 1) >= 3:
+                    right = self._blank_event(created_event_id, split_s, original_end)
+                else:
+                    right = copy.deepcopy(selected)
+                    right["event_id"] = created_event_id
+                    right["sony_start_s"] = split_s
+                    right["sony_end_s"] = original_end
+                    right["status"] = "trener"
+                    for key in ANNOTATION_FIELDS:
+                        right[key] = None
+                    for key in AUTO_VOICE_FIELDS:
+                        right[key] = 0.0 if key == "pouzdanost_glasa" else None
                 review["events"].append(right)
                 generated.update({selected["event_id"], created_event_id})
                 selected_event_id = selected["event_id"]
@@ -134,6 +145,12 @@ class EventEditor:
                     raise ValueError("spajanje zahteva dva različita ID događaja")
                 first = self._normal_event(review, ids[0])
                 second = self._normal_event(review, ids[1])
+                if review.get("version", 1) >= 3 and (
+                    first.get("trener_procene") or second.get("trener_procene")
+                ):
+                    raise EventConflictError(
+                        "događaji sa zaključanim trenerskim procenama ne mogu se spojiti"
+                    )
                 ordered = sorted((first, second), key=lambda item: float(item["sony_start_s"]))
                 normal_order = [
                     item["event_id"]
@@ -193,9 +210,14 @@ class EventEditor:
             for item in review["events"]:
                 if item["event_id"] in generated:
                     self._refresh_event(review, item)
+                    if review.get("version", 1) >= 3:
+                        start_new_event_revision(review, item)
             review["event_metrics"] = copy.deepcopy(review["events"])
             validate_review_payload(review)
-            self._persist_transaction(original, review, generated, deleted)
+            if review.get("version", 1) >= 3:
+                self._persist_generation(review, generated, deleted)
+            else:
+                self._persist_transaction(original, review, generated, deleted)
             result = {"review": review, "selected_event_id": selected_event_id}
             if created_event_id is not None:
                 result["created_event_id"] = created_event_id
@@ -380,6 +402,40 @@ class EventEditor:
                 raise
         finally:
             shutil.rmtree(transaction, ignore_errors=True)
+
+    def _persist_generation(
+        self,
+        review: dict[str, Any],
+        generated: set[str],
+        deleted: set[str],
+    ) -> None:
+        if self.generation_activator is None:
+            raise RuntimeError("v3 editor zahteva generation activator")
+        with tempfile.TemporaryDirectory(prefix="lion-judo-events-") as raw:
+            staging_root = Path(raw)
+            staged_media: dict[str, Path] = {}
+            try:
+                for event_id in generated:
+                    event = next(
+                        event
+                        for event in review["events"]
+                        if event["event_id"] == event_id
+                    )
+                    event_root = staging_root / event_id
+                    self._export_event(review, event, event_root)
+                    for camera in ("sony", "iphone"):
+                        staged_media[f"events/{event_id}/{camera}.mp4"] = (
+                            event_root / f"{camera}.mp4"
+                        )
+            except Exception as exc:
+                raise MediaExportError(f"izvoz medija nije uspeo: {exc}") from exc
+            self.generation_activator(
+                review,
+                staged_media=staged_media,
+                removed_media_prefixes=tuple(
+                    f"events/{event_id}" for event_id in sorted(deleted)
+                ),
+            )
 
 
 __all__ = [
