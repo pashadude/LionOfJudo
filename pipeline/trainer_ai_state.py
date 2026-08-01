@@ -23,6 +23,7 @@ TRAINER_PHASES = {"pre_ai", "post_ai_korekcija"}
 VISIBILITY_STATES = {"dovoljno_vidljivo", "nedovoljno_vidljivo"}
 AI_RELATIONS = {"slazem_se", "delimicno", "ne_slazem_se"}
 EVIDENCE_RELATIONS = {"prihvatam", "nepotpun", "osporavam"}
+PARTICIPANT_FIELDS = {"trainer_name", "wrestler_name", "updated_at"}
 STATE_KEYS = {
     "event_revision",
     "analysis_fingerprint",
@@ -87,6 +88,29 @@ def _iso_time(value: Any, field: str, *, nullable: bool = False) -> str | None:
     if parsed.tzinfo is None:
         raise ValueError(f"{field} mora sadržati vremensku zonu")
     return value
+
+
+def validate_participants(value: object, *, required: bool = False) -> dict[str, str] | None:
+    if value is None and not required:
+        return None
+    if not isinstance(value, Mapping) or set(value) != PARTICIPANT_FIELDS:
+        raise ValueError("podaci učesnika nemaju tačna obavezna polja")
+    participants: dict[str, str] = {}
+    for field, label in (
+        ("trainer_name", "ime trenera"),
+        ("wrestler_name", "ime rvača"),
+    ):
+        name = value.get(field)
+        if not isinstance(name, str):
+            raise ValueError(f"{label} mora biti tekst")
+        normalized = name.strip()
+        if not normalized or len(normalized) > 120:
+            raise ValueError(f"{label} mora imati između 1 i 120 znakova")
+        participants[field] = normalized
+    updated_at = _iso_time(value.get("updated_at"), "updated_at")
+    assert updated_at is not None
+    participants["updated_at"] = updated_at
+    return participants
 
 
 def _list(value: Any, field: str) -> list[Any]:
@@ -189,7 +213,7 @@ def _validate_trainer_assessments(
 ) -> dict[int, Mapping[str, Any]]:
     assessments = _list(event.get("trener_procene"), "trener_procene")
     references: dict[int, Mapping[str, Any]] = {}
-    first_phase: dict[int, str] = {}
+    rounds: dict[tuple[int, str], list[Mapping[str, Any]]] = {}
     start = _finite(event.get("sony_start_s"), "sony_start_s")
     end = _finite(event.get("sony_end_s"), "sony_end_s")
     for assessment in assessments:
@@ -210,12 +234,7 @@ def _validate_trainer_assessments(
         )
         if (event_revision, fingerprint, EVALUATOR_ID) not in ai_references:
             raise ValueError("trener procena nema odgovarajuću AI procenu")
-        if event_revision not in first_phase:
-            first_phase[event_revision] = phase
-            if phase != "pre_ai":
-                raise ValueError("prva trener procena mora biti pre_ai")
-        elif phase != "post_ai_korekcija":
-            raise ValueError("kasnija trener procena mora biti post_ai_korekcija")
+        rounds.setdefault((event_revision, fingerprint), []).append(assessment)
         visibility = assessment.get("status_vidljivosti")
         if visibility not in VISIBILITY_STATES:
             raise ValueError("status vidljivosti nije validan")
@@ -240,6 +259,25 @@ def _validate_trainer_assessments(
             if score is not None or reason not in (None, "") or citations not in (None, []):
                 raise ValueError("nedovoljno vidljiv događaj ne sme imati ocenu ili razlog")
         _iso_time(assessment.get("zakljucano_u"), "zakljucano_u")
+    for (event_revision, fingerprint), rows in rounds.items():
+        ordered_rows = sorted(rows, key=lambda row: row["revizija"])
+        for position, assessment in enumerate(ordered_rows):
+            phase = assessment["faza"]
+            if position == 0:
+                if phase != "pre_ai":
+                    raise ValueError("prva trener procena mora biti pre_ai")
+                continue
+            if phase != "post_ai_korekcija":
+                raise ValueError("kasnija trener procena mora biti post_ai_korekcija")
+            revealed_at = ai_references[
+                (event_revision, fingerprint, EVALUATOR_ID)
+            ].get("ai_otkriven_u")
+            if revealed_at is None:
+                raise ValueError("post_ai procena zahteva otkrivenu AI procenu")
+            if datetime.fromisoformat(assessment["zakljucano_u"]) < datetime.fromisoformat(
+                revealed_at
+            ):
+                raise ValueError("post_ai procena ne može biti zaključana pre otkrivanja AI procene")
     return references
 
 
@@ -501,5 +539,6 @@ __all__ = [
     "active_trainer_assessment",
     "migrate_trainer_ai_payload",
     "start_new_event_revision",
+    "validate_participants",
     "validate_trainer_ai_event",
 ]

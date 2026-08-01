@@ -5,7 +5,7 @@ import re
 from typing import Any, Mapping
 
 from pipeline.trainer_ai_evaluator import compute_analysis_fingerprint
-from pipeline.trainer_ai_state import validate_trainer_ai_event
+from pipeline.trainer_ai_state import validate_participants, validate_trainer_ai_event
 from pipeline.video_review_sync import iphone_media_bounds, iphone_sync_offset
 
 
@@ -242,6 +242,7 @@ def validate_review_payload(payload: Mapping[str, Any]) -> None:
     """Validate the final persisted review payload across derived collections."""
     if not isinstance(payload, Mapping):
         raise TypeError("review payload must be a JSON object")
+    validate_participants(payload.get("participants"))
     version = payload.get("version", 1)
     if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
         raise ValueError("review version must be a positive integer")
@@ -315,6 +316,7 @@ def validate_review_payload(payload: Mapping[str, Any]) -> None:
         "vreme_oporavka_s",
         "intenzitet_pokreta_0_100",
     )
+    trainer_revisions: set[int] = set()
     for raw_event in raw_events:
         if not isinstance(raw_event, Mapping):
             raise TypeError("events must contain JSON objects")
@@ -357,6 +359,12 @@ def validate_review_payload(payload: Mapping[str, Any]) -> None:
                 raise ValueError("event analysis_fingerprint ne odgovara aktivnim podacima")
         if version >= 3:
             validate_trainer_ai_event(raw_event)
+            if not is_injury:
+                for assessment in raw_event.get("trener_procene", []):
+                    revision = assessment.get("revizija")
+                    if revision in trainer_revisions:
+                        raise ValueError("trener revizija mora biti globalno jedinstvena")
+                    trainer_revisions.add(revision)
 
     frame_metrics = payload.get("frame_metrics", [])
     if not isinstance(frame_metrics, list):

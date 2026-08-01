@@ -14,6 +14,7 @@ from coach_app.review_bundle import GenerationStore
 from pipeline.trainer_ai_state import (
     active_ai_evaluation,
     active_trainer_assessment,
+    validate_participants,
     validate_trainer_ai_event,
 )
 from pipeline.video_review_reports import event_is_injury, write_reports
@@ -29,6 +30,7 @@ ASSESSMENT_FIELDS = {
 }
 FEEDBACK_FIELDS = {"odnos", "razlog", "procene_dokaza"}
 DRAFT_FIELDS = {"potvrdena_tehnika", "ocena", "napomena"}
+PARTICIPANT_INPUT_FIELDS = {"trainer_name", "wrestler_name"}
 AI_RELATIONS = {"slazem_se", "delimicno", "ne_slazem_se"}
 EVIDENCE_RELATIONS = {"prihvatam", "nepotpun", "osporavam"}
 
@@ -55,6 +57,10 @@ class TrainerAiService:
         with self.mutation_lock:
             review = self.load_review()
             event = self._normal_event(review, event_id)
+            if review.get("participants") is None:
+                raise ValueError("ime trenera i ime rvača moraju biti sačuvani")
+            participants = validate_participants(review.get("participants"), required=True)
+            assert participants is not None
             values = self._validate_assessment_payload(event, payload)
             ai = active_ai_evaluation(event)
             if ai is None:
@@ -81,6 +87,8 @@ class TrainerAiService:
                 "faza": phase,
                 "event_revision": event["event_revision"],
                 "analysis_fingerprint": event["analysis_fingerprint"],
+                "trainer_name": participants["trainer_name"],
+                "wrestler_name": participants["wrestler_name"],
                 **values,
                 "zakljucano_u": self._now_iso(),
             }
@@ -100,6 +108,19 @@ class TrainerAiService:
                 validate_trainer_ai_event(event)
             self._activate(review)
             return {"event": copy.deepcopy(event), "assessment": copy.deepcopy(assessment)}
+
+    def save_participants(self, payload: object) -> dict[str, Any]:
+        with self.mutation_lock:
+            if not isinstance(payload, Mapping) or set(payload) != PARTICIPANT_INPUT_FIELDS:
+                raise ValueError("podaci učesnika nemaju tačna obavezna polja")
+            participants = validate_participants(
+                {**payload, "updated_at": self._now_iso()}, required=True
+            )
+            assert participants is not None
+            review = self.load_review()
+            review["participants"] = participants
+            self._activate(review)
+            return {"participants": copy.deepcopy(participants)}
 
     def reveal_ai(self, event_id: str) -> dict[str, Any]:
         with self.mutation_lock:

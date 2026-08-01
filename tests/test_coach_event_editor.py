@@ -100,6 +100,11 @@ class CoachEventEditorTests(unittest.TestCase):
                     ],
                     "time_map": {"slope": 1.0, "intercept": -5.0},
                     "injury_cutoff_s": 20.0,
+                    "participants": {
+                        "trainer_name": "Marko",
+                        "wrestler_name": "Dusan",
+                        "updated_at": "2026-08-01T12:00:00+00:00",
+                    },
                     "sync_locked": True,
                     "frame_metrics": frame_metrics,
                     "events": [normal, injury],
@@ -453,6 +458,29 @@ class CoachEventEditorTests(unittest.TestCase):
         self.assertEqual(orphan["reason"], "obrisan_dogadjaj")
         self.assertEqual(orphan["potvrdena_tehnika"], "O-soto-gari")
         self.assertFalse((self.root / "events" / "e-1").exists())
+
+    def test_delete_rejects_event_with_trainer_history(self):
+        self.upgrade_to_v3()
+        server = self.start_server()
+        review = server.trainer_ai_service.load_review()
+        event = review["events"][0]
+        event["trener_procene"] = [{
+            "revizija": 1,
+            "faza": "pre_ai",
+            "event_revision": event["event_revision"],
+            "analysis_fingerprint": event["analysis_fingerprint"],
+            "status_vidljivosti": "dovoljno_vidljivo",
+            "potvrdena_tehnika": "Tai-otoshi",
+            "ocena": 4,
+            "razlog": "Na 8.500 s ulazak je vidljiv.",
+            "citirani_sony_trenuci_s": [8.5],
+            "zakljucano_u": "2026-08-01T12:00:00+00:00",
+        }]
+        server.trainer_ai_service.activate_review(review)
+
+        error = self.assert_http_error(409, server, "/api/events/e-1", method="DELETE")
+
+        self.assertIn("zaključan", error["error"])
 
     def test_delete_rejects_source_video_inside_managed_events_directory(self):
         embedded_source = self.root / "events" / "e-1" / "sony.mp4"

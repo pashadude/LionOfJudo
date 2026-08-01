@@ -198,6 +198,10 @@ class EventEditor:
                 selected_event_id = survivor["event_id"]
             elif operation == "delete":
                 selected = self._normal_event(review, event_id)
+                if selected.get("trener_procene"):
+                    raise EventConflictError(
+                        "zaključan događaj sa trenerskim procenama ne može se obrisati"
+                    )
                 annotation = _annotation(selected)
                 if annotation:
                     review.setdefault("orphaned_annotations", []).append({

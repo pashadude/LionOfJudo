@@ -37,6 +37,11 @@ class CoachTrainerAiTests(unittest.TestCase):
                 "failure_reason": None,
             }
         ]
+        self.review["participants"] = {
+            "trainer_name": "Marko",
+            "wrestler_name": "Dusan",
+            "updated_at": "2026-08-01T12:00:00+00:00",
+        }
         self.review_path = self.root / "review.json"
         self.review_path.write_text(
             json.dumps(self.review, ensure_ascii=False, indent=2),
@@ -119,6 +124,28 @@ class CoachTrainerAiTests(unittest.TestCase):
             (self.root / "media" / "session_side_by_side.mp4").stat().st_ino,
             (snapshot.root / "media" / "session_side_by_side.mp4").stat().st_ino,
         )
+
+    def test_participants_are_required_and_snapshotted_per_assessment(self):
+        review = self.service.load_review()
+        review.pop("participants")
+        self.service.activate_review(review)
+        with self.assertRaisesRegex(ValueError, "ime trenera"):
+            self.service.lock_assessment("e-001", self.visible_assessment())
+        saved = self.service.save_participants({
+            "trainer_name": "  Marko Markovic  ",
+            "wrestler_name": " Dusan ",
+        })
+        locked = self.service.lock_assessment("e-001", self.visible_assessment())
+
+        self.assertEqual(saved["participants"]["trainer_name"], "Marko Markovic")
+        self.assertEqual(locked["assessment"]["wrestler_name"], "Dusan")
+
+    def test_later_participant_edit_does_not_rewrite_locked_identity(self):
+        self.service.save_participants({"trainer_name": "Marko", "wrestler_name": "Dusan"})
+        first = self.service.lock_assessment("e-001", self.visible_assessment())["assessment"]
+        self.service.save_participants({"trainer_name": "Jovan", "wrestler_name": "Dusan"})
+
+        self.assertEqual(first["trainer_name"], "Marko")
 
     def test_store_rejects_mismatched_event_metrics_without_switching(self):
         with self.assertRaisesRegex(ValueError, "event_metrics"):
@@ -315,6 +342,8 @@ class CoachTrainerAiTests(unittest.TestCase):
                     "analysis_fingerprint": self.review["events"][0][
                         "analysis_fingerprint"
                     ],
+                    "trainer_name": "Marko",
+                    "wrestler_name": "Dusan",
                     **self.visible_assessment(),
                     "zakljucano_u": "2026-08-01T12:00:00+00:00",
                 }

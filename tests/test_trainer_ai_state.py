@@ -7,8 +7,10 @@ from pipeline.trainer_ai_state import (
     active_trainer_assessment,
     migrate_trainer_ai_payload,
     start_new_event_revision,
+    validate_participants,
     validate_trainer_ai_event,
 )
+from pipeline.video_review_contract import validate_review_payload
 
 
 def legacy_review_fixture():
@@ -89,7 +91,144 @@ def valid_locked_event():
     return event
 
 
+def valid_review_payload():
+    review = migrate_trainer_ai_payload(legacy_review_fixture())
+    review.update({
+        "session_id": "trainer-state",
+        "sony_video": "sony.mp4",
+        "iphone_video": "iphone.mp4",
+        "sony_duration_s": 6.0,
+        "iphone_duration_s": 9.0,
+        "sony_fps": 30.0,
+        "iphone_fps": 30.0,
+        "anchors": [
+            {
+                "name": "pocetak",
+                "sony_s": 0.0,
+                "iphone_s": 3.0,
+                "user_confirmed": True,
+                "triple_tap_count": 3,
+            },
+            {
+                "name": "kontrola",
+                "sony_s": 4.0,
+                "iphone_s": 7.0,
+                "user_confirmed": True,
+                "triple_tap_count": 3,
+            },
+        ],
+        "time_map": {"slope": 1.0, "intercept": -3.0},
+        "injury_cutoff_s": 5.0,
+    })
+    injury = review["events"][1]
+    injury.update({
+        "sony_start_s": 5.0,
+        "sony_end_s": 5.5,
+        "iphone_start_s": 8.0,
+        "iphone_end_s": 8.5,
+    })
+    review["event_metrics"] = copy.deepcopy(review["events"])
+    return review
+
+
 class TrainerAiStateTests(unittest.TestCase):
+    def test_validation_groups_assessment_phase_by_revision_and_fingerprint(self):
+        event = valid_locked_event()
+        alternate_fingerprint = "sha256:" + "f" * 64
+        alternate_ai = copy.deepcopy(event["ai_procene"][0])
+        alternate_ai.update({
+            "analysis_fingerprint": alternate_fingerprint,
+            "ai_otkriven_u": None,
+        })
+        event["ai_procene"].append(alternate_ai)
+        alternate_assessment = copy.deepcopy(event["trener_procene"][0])
+        alternate_assessment.update({
+            "revizija": 3,
+            "analysis_fingerprint": alternate_fingerprint,
+            "zakljucano_u": "2026-08-01T12:03:00+02:00",
+        })
+        post_ai = copy.deepcopy(event["trener_procene"][0])
+        post_ai.update({
+            "revizija": 2,
+            "faza": "post_ai_korekcija",
+            "zakljucano_u": "2026-08-01T12:02:00+02:00",
+        })
+        event["trener_procene"] = [post_ai, alternate_assessment, event["trener_procene"][0]]
+
+        validate_trainer_ai_event(event)
+
+    def test_validation_rejects_post_ai_assessment_before_reveal(self):
+        event = valid_locked_event()
+        event["trener_procene"].append({
+            **event["trener_procene"][0],
+            "revizija": 2,
+            "faza": "post_ai_korekcija",
+            "zakljucano_u": "2026-08-01T09:59:59+00:00",
+        })
+        with self.assertRaisesRegex(ValueError, "otkriv"):
+            validate_trainer_ai_event(event)
+
+    def test_validate_participants_requires_exact_fields_and_normalizes_names(self):
+        with self.assertRaisesRegex(ValueError, "tačna obavezna polja"):
+            validate_participants({"trainer_name": "Marko"})
+        with self.assertRaisesRegex(ValueError, "ime trenera"):
+            validate_participants({
+                "trainer_name": " ",
+                "wrestler_name": "Dusan",
+                "updated_at": "2026-08-01T12:00:00+00:00",
+            })
+
+        self.assertEqual(
+            validate_participants({
+                "trainer_name": "  Marko Markovic  ",
+                "wrestler_name": " Dusan ",
+                "updated_at": "2026-08-01T12:00:00+00:00",
+            }),
+            {
+                "trainer_name": "Marko Markovic",
+                "wrestler_name": "Dusan",
+                "updated_at": "2026-08-01T12:00:00+00:00",
+            },
+        )
+
+    def test_review_rejects_duplicate_global_trainer_revision_across_events(self):
+        review = valid_review_payload()
+        first = valid_locked_event()["trener_procene"][0]
+        first["analysis_fingerprint"] = review["events"][0]["analysis_fingerprint"]
+        review["events"][0]["trener_procene"] = [copy.deepcopy(first)]
+        review["events"][0]["aktivna_trener_revizija"] = 1
+        review["events"][0]["ai_procene"][0]["ai_otkriven_u"] = (
+            "2026-08-01T12:01:00+02:00"
+        )
+        review["events"][0]["aktivni_duel"] = {
+            "event_revision": 1,
+            "analysis_fingerprint": review["events"][0]["analysis_fingerprint"],
+            "trener_revizija": 1,
+            "evaluator_id": "deterministicki-v1",
+        }
+        second = copy.deepcopy(review["events"][0])
+        second.update({
+            "event_id": "e-2",
+            "sony_start_s": 2.0,
+            "sony_end_s": 4.0,
+            "iphone_start_s": 5.0,
+            "iphone_end_s": 7.0,
+        })
+        from pipeline.trainer_ai_evaluator import compute_analysis_fingerprint
+
+        second_fingerprint = compute_analysis_fingerprint(review, second)
+        second["analysis_fingerprint"] = second_fingerprint
+        second["ai_procene"][0]["analysis_fingerprint"] = second_fingerprint
+        second["ai_procene"][0]["dokazi"] = []
+        second["trener_procene"][0]["analysis_fingerprint"] = second_fingerprint
+        second["trener_procene"][0]["citirani_sony_trenuci_s"] = [3.0]
+        second["aktivni_duel"]["analysis_fingerprint"] = second_fingerprint
+        review["events"].append(second)
+        review["event_metrics"] = copy.deepcopy(review["events"])
+
+        with self.assertRaisesRegex(ValueError, "globalno jedinstvena"):
+            validate_review_payload(review)
+
     def test_migration_adds_versioned_state_without_inventing_scores(self):
         migrated = migrate_trainer_ai_payload(legacy_review_fixture())
         normal, injury = migrated["events"]
