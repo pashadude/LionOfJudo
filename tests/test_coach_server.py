@@ -516,8 +516,10 @@ class CoachServerTests(unittest.TestCase):
         )
         html = (static / "index.html").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/app.js?v=h264-media-1"', html)
+        self.assertIn('src="/static/app.js?v=slow-motion-sync-1"', html)
         self.assertIn("function correctIphonePlayback", app_js)
+        self.assertIn("function iphoneBasePlaybackRate", app_js)
+        self.assertIn("1 / slope", app_js)
         self.assertIn("Promise.all([sony.play(), iphone.play()])", app_js)
         self.assertIn("iphone.playbackRate = clamp", app_js)
         self.assertEqual(app_js.count("iphone.currentTime = times.iphoneLocalTime;"), 1)

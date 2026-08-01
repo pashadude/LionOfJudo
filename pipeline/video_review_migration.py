@@ -167,6 +167,23 @@ def _prepare_ai_review_payload(
     prepared["version"] = 2
     prepared["session_id"] = session_id
     prepared["injury_cutoff_s"] = 135.0
+    prepared["anchors"] = [
+        {
+            "name": "tri_udara_pocetak",
+            "sony_s": 127.42,
+            "iphone_s": 131.0,
+            "user_confirmed": True,
+            "triple_tap_count": 3,
+        },
+        {
+            "name": "tri_udara_kraj",
+            "sony_s": 128.0,
+            "iphone_s": 132.16,
+            "user_confirmed": True,
+            "triple_tap_count": 3,
+        },
+    ]
+    prepared["time_map"] = {"slope": 0.5, "intercept": 61.92}
     prepared.pop("derived_media_manifest", None)
     prepared.pop("session_ready", None)
     prepared["events"] = [
@@ -174,9 +191,9 @@ def _prepare_ai_review_payload(
             "event_id": "e-001",
             "sony_start_s": 128.5,
             "sony_end_s": 132.0,
-            "iphone_start_s": 131.5,
-            "iphone_end_s": 135.0,
-            "iphone_sync_offset_s": 0.8,
+            "iphone_start_s": 133.16,
+            "iphone_end_s": 140.16,
+            "iphone_sync_offset_s": 0.0,
             "predlog_tehnike": None,
             "potvrdena_tehnika": "Tai-otoshi",
             "glasovna_fraza": None,
@@ -194,8 +211,8 @@ def _prepare_ai_review_payload(
             "event_id": "e-coach-001",
             "sony_start_s": 132.8,
             "sony_end_s": 135.0,
-            "iphone_start_s": 135.8,
-            "iphone_end_s": 138.0,
+            "iphone_start_s": 141.76,
+            "iphone_end_s": 146.16,
             "iphone_sync_offset_s": 0.0,
             "predlog_tehnike": None,
             "potvrdena_tehnika": "Morote-seoi-nage",
@@ -214,8 +231,8 @@ def _prepare_ai_review_payload(
             "event_id": "povreda",
             "sony_start_s": 135.0,
             "sony_end_s": 136.0,
-            "iphone_start_s": 138.0,
-            "iphone_end_s": 139.0,
+            "iphone_start_s": 146.16,
+            "iphone_end_s": 148.16,
             "iphone_sync_offset_s": 0.0,
             "predlog_tehnike": None,
             "potvrdena_tehnika": None,

@@ -14,7 +14,7 @@
   const MIN_EVENT_SPAN = 0.001;
   const DRAFT_EVENT_SPAN = 1;
   const HARD_SYNC_THRESHOLD_S = 0.12;
-  const MAX_PLAYBACK_RATE_CORRECTION = 0.04;
+  const MAX_RELATIVE_PLAYBACK_RATE_CORRECTION = 0.04;
   const PLAYBACK_RATE_GAIN = 0.8;
   const MEDIA_CODEC_VERSION = "h264-v1";
 
@@ -53,6 +53,12 @@
 
   function iphoneTime(sonyTime) {
     return inverseIphoneTime(sonyTime, state.review);
+  }
+
+  function iphoneBasePlaybackRate(review = state.review) {
+    const slope = Number(review?.time_map?.slope);
+    if (!Number.isFinite(slope) || slope <= 0) return 1;
+    return clamp(1 / slope, 0.25, 4);
   }
 
   function eventSpan(event, startKey, endKey) {
@@ -97,7 +103,7 @@
     state.syncing = true;
     sony.currentTime = times.sonyLocalTime;
     iphone.currentTime = times.iphoneLocalTime;
-    iphone.playbackRate = 1;
+    iphone.playbackRate = iphoneBasePlaybackRate();
     state.syncing = false;
   }
 
@@ -105,16 +111,17 @@
     const target = Number(times?.iphoneLocalTime);
     const current = Number(iphone.currentTime);
     if (!Number.isFinite(target) || !Number.isFinite(current)) return;
+    const baseRate = iphoneBasePlaybackRate();
     const drift = target - current;
     if (hardSync || iphone.paused || Math.abs(drift) >= HARD_SYNC_THRESHOLD_S) {
       if (Math.abs(drift) > 0.001) iphone.currentTime = target;
-      iphone.playbackRate = 1;
+      iphone.playbackRate = baseRate;
       return;
     }
     iphone.playbackRate = clamp(
-      1 + drift * PLAYBACK_RATE_GAIN,
-      1 - MAX_PLAYBACK_RATE_CORRECTION,
-      1 + MAX_PLAYBACK_RATE_CORRECTION,
+      baseRate + drift * PLAYBACK_RATE_GAIN,
+      baseRate * (1 - MAX_RELATIVE_PLAYBACK_RATE_CORRECTION),
+      baseRate * (1 + MAX_RELATIVE_PLAYBACK_RATE_CORRECTION),
     );
   }
 

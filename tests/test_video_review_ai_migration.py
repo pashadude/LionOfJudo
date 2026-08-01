@@ -164,8 +164,19 @@ class VideoReviewAiMigrationTests(unittest.TestCase):
         self.assertEqual(prepared["session_id"], "trainer-ai-session")
         self.assertFalse(prepared["session_ready"])
         self.assertEqual(prepared["derived_media_manifest"], [])
-        self.assertEqual(prepared["side_by_side_start_s"], 128.0)
+        self.assertEqual(prepared["side_by_side_start_s"], 127.42)
         self.assertEqual(prepared["side_by_side_end_s"], 136.0)
+        self.assertEqual(
+            prepared["time_map"],
+            {"slope": 0.5, "intercept": 61.92},
+        )
+        self.assertEqual(
+            [
+                (anchor["sony_s"], anchor["iphone_s"])
+                for anchor in prepared["anchors"]
+            ],
+            [(127.42, 131.0), (128.0, 132.16)],
+        )
         self.assertEqual(
             [event["event_id"] for event in prepared["events"]],
             ["e-001", "e-coach-001", "povreda"],
@@ -181,7 +192,17 @@ class VideoReviewAiMigrationTests(unittest.TestCase):
         )
         self.assertEqual(
             [event["iphone_sync_offset_s"] for event in prepared["events"]],
-            [0.8, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        )
+        self.assertEqual(
+            [
+                (
+                    round(event["iphone_start_s"], 3),
+                    round(event["iphone_end_s"], 3),
+                )
+                for event in prepared["events"]
+            ],
+            [(133.16, 140.16), (141.76, 146.16), (146.16, 148.16)],
         )
         for event in normal:
             self.assertEqual(event["status"], "trener")
@@ -193,7 +214,7 @@ class VideoReviewAiMigrationTests(unittest.TestCase):
         self.assertEqual((injury["sony_start_s"], injury["sony_end_s"]), (135.0, 136.0))
         self.assertNotIn("ai_procene", injury)
 
-    def test_private_media_regeneration_applies_only_event_iphone_offset(self):
+    def test_private_media_regeneration_uses_retimed_iphone_windows(self):
         prepared = _prepare_ai_review_payload(
             self.valid_review(), "trainer-ai-session"
         )
@@ -237,11 +258,14 @@ class VideoReviewAiMigrationTests(unittest.TestCase):
             for path, start, end in exported
             if path.startswith("events/")
         }
-        self.assertEqual(windows["events/e-001/iphone.mp4"], (132.3, 135.8))
-        self.assertEqual(
-            windows["events/e-coach-001/iphone.mp4"], (135.8, 138.0)
+        self.assertEqual(windows["events/e-001/iphone.mp4"], (133.16, 140.16))
+        self.assertAlmostEqual(
+            windows["events/e-coach-001/iphone.mp4"][0], 141.76
         )
-        self.assertEqual(windows["events/povreda/iphone.mp4"], (138.0, 139.0))
+        self.assertAlmostEqual(
+            windows["events/e-coach-001/iphone.mp4"][1], 146.16
+        )
+        self.assertEqual(windows["events/povreda/iphone.mp4"], (146.16, 148.16))
         self.assertEqual(windows["events/e-001/sony.mp4"], (128.5, 132.0))
 
     @staticmethod

@@ -28,10 +28,14 @@ async function main() {
   const slope = Number(review.time_map.slope);
   const intercept = Number(review.time_map.intercept);
   assert.ok(Number.isFinite(slope) && slope > 0 && Number.isFinite(intercept));
-  const expectedIphoneLocal = (sonyLocal) => (
+  const expectedIphoneRate = 1 / slope;
+  assert.ok(Math.abs(expectedIphoneRate - 2) < 0.001);
+  const iphoneSpan = Number(event.iphone_end_s) - Number(event.iphone_start_s);
+  const expectedIphoneLocal = (sonyLocal) => Math.max(0, Math.min(
+    iphoneSpan,
     ((Number(event.sony_start_s) + sonyLocal - intercept) / slope)
-      - Number(event.iphone_start_s)
-  );
+      - Number(event.iphone_start_s),
+  ));
   const mappedDrift = (sample) => Math.abs(
     sample[1].currentTime - expectedIphoneLocal(sample[0].currentTime)
   );
@@ -84,7 +88,9 @@ async function main() {
     const drifts = warmed.map(mappedDrift);
     assert.ok(Math.max(...drifts) < 0.035, `playback drift: ${drifts.join(",")}`);
     assert.equal(await page.evaluate(() => window.__iphoneSeekCount), 0);
-    assert.ok(warmed.some((sample) => Math.abs(sample[1].playbackRate - 1) > 0.0001));
+    assert.ok(warmed.every((sample) => (
+      Math.abs(sample[1].playbackRate - expectedIphoneRate) < 0.1
+    )));
 
     await play.click();
     await page.waitForFunction(
