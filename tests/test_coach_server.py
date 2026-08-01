@@ -357,6 +357,15 @@ class CoachServerTests(unittest.TestCase):
         self.assertNotIn("|| 30", app_js)
         self.assertIn("FPS Sony nije dostupan", app_js)
 
+    def test_injury_editor_state_disables_note_and_reenables_for_normal_events(self):
+        app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("function setEditorDisabled", app_js)
+        self.assertIn('$("#note").disabled = disabled;', app_js)
+        self.assertIn("setEditorDisabled(true);", app_js)
+        self.assertIn("setEditorDisabled(disabled);", app_js)
+
 
 if __name__ == "__main__":
     unittest.main()

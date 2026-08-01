@@ -103,19 +103,26 @@
     return media[camera] || `/media/events/${encodeURIComponent(event.event_id)}/${camera}.mp4`;
   }
 
+  function setEditorDisabled(disabled) {
+    $("#confirmed-technique").disabled = disabled;
+    $("#score").disabled = disabled;
+    $("#note").disabled = disabled;
+    $("#save-button").disabled = disabled;
+  }
+
   function updateEditor(event) {
     const disabled = injury(event);
     $("#suggested-technique").value = event.predlog_tehnike || "";
     $("#confirmed-technique").value = event.potvrdena_tehnika || "";
     $("#score").value = event.ocena == null ? "" : String(event.ocena);
     $("#note").value = event.napomena || "";
-    $("#confirmed-technique").disabled = disabled;
-    $("#score").disabled = disabled;
-    $("#save-button").disabled = disabled;
+    setEditorDisabled(disabled);
     const visibility = $("#visibility-state");
     visibility.textContent = disabled ? "Prijavljen povredni događaj · Nedovoljno vidljivo" : "";
     visibility.classList.toggle("warning", disabled);
   }
+
+  setEditorDisabled(true);
 
   function selectEvent(event) {
     state.selected = event;
