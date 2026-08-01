@@ -150,9 +150,11 @@
   }
 
   function firstConfirmedSonyAnchor() {
-    const anchor = (state.review?.anchors || []).find((item) => item?.user_confirmed === true);
-    const sonyTime = Number(anchor?.sony_s);
-    return Number.isFinite(sonyTime) ? sonyTime : null;
+    const confirmedSonyTimes = (state.review?.anchors || [])
+      .filter((item) => item?.user_confirmed === true)
+      .map((item) => Number(item?.sony_s))
+      .filter((sonyTime) => Number.isFinite(sonyTime));
+    return confirmedSonyTimes.length ? Math.min(...confirmedSonyTimes) : null;
   }
 
   function normalEventDraftBounds() {
@@ -205,11 +207,12 @@
 
   function updateCorrectionControls() {
     const event = state.selected;
-    const readOnly = !event || injury(event);
+    const canEditSelectedNormal = Boolean(event && !injury(event));
+    const readOnly = !canEditSelectedNormal;
     const canCreateEvent = Boolean(normalEventDraftBounds());
-    $("#event-start").disabled = !canCreateEvent;
-    $("#event-end").disabled = !canCreateEvent;
-    $("#update-bounds-button").disabled = readOnly;
+    $("#event-start").disabled = !(canEditSelectedNormal || canCreateEvent);
+    $("#event-end").disabled = !(canEditSelectedNormal || canCreateEvent);
+    $("#update-bounds-button").disabled = !canEditSelectedNormal;
     $("#create-event-button").disabled = !canCreateEvent;
     $("#delete-button").disabled = readOnly;
     $("#merge-button").disabled = readOnly || !nextNormalEvent(event);

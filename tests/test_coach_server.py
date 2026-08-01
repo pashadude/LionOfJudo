@@ -404,11 +404,23 @@ class CoachServerTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("function normalEventDraftBounds", app_js)
+        self.assertIn("const canEditSelectedNormal = Boolean(event && !injury(event));", app_js)
         self.assertIn("const canCreateEvent = Boolean(normalEventDraftBounds());", app_js)
-        self.assertIn('$("#event-start").disabled = !canCreateEvent;', app_js)
-        self.assertIn('$("#event-end").disabled = !canCreateEvent;', app_js)
+        self.assertIn('$("#event-start").disabled = !(canEditSelectedNormal || canCreateEvent);', app_js)
+        self.assertIn('$("#event-end").disabled = !(canEditSelectedNormal || canCreateEvent);', app_js)
         self.assertIn('$("#create-event-button").disabled = !canCreateEvent;', app_js)
+        self.assertIn('$("#update-bounds-button").disabled = !canEditSelectedNormal;', app_js)
         self.assertIn('if (injury(event)) populateDraftEventBounds();', app_js)
+
+    def test_normal_selection_keeps_bounds_editable_when_no_creation_gap_exists(self):
+        app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("const canEditSelectedNormal = Boolean(event && !injury(event));", app_js)
+        self.assertIn('$("#event-start").disabled = !(canEditSelectedNormal || canCreateEvent);', app_js)
+        self.assertIn('$("#event-end").disabled = !(canEditSelectedNormal || canCreateEvent);', app_js)
+        self.assertIn('$("#update-bounds-button").disabled = !canEditSelectedNormal;', app_js)
+        self.assertIn('$("#create-event-button").disabled = !canCreateEvent;', app_js)
 
     def test_event_creation_draft_is_clamped_to_confirmed_anchor_and_injury_cutoff(self):
         app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
@@ -420,6 +432,19 @@ class CoachServerTests(unittest.TestCase):
         self.assertIn("end - start > MIN_EVENT_SPAN", app_js)
         self.assertIn("Nema dostupnog normalnog intervala", app_js)
         self.assertIn("if (!canCreateEvent && event && injury(event))", app_js)
+
+    def test_confirmed_anchor_uses_minimum_valid_sony_timestamp(self):
+        app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        start = app_js.index("function firstConfirmedSonyAnchor")
+        end = app_js.index("function normalEventDraftBounds", start)
+        anchor_helper = app_js[start:end]
+        self.assertIn(".filter((item) => item?.user_confirmed === true)", anchor_helper)
+        self.assertIn(".map((item) => Number(item?.sony_s))", anchor_helper)
+        self.assertIn(".filter((sonyTime) => Number.isFinite(sonyTime))", anchor_helper)
+        self.assertIn("Math.min(...confirmedSonyTimes)", anchor_helper)
+        self.assertIn("confirmedSonyTimes.length ?", anchor_helper)
 
     def test_ui_uses_canonical_event_series_and_complete_correction_controls(self):
         static = Path(__file__).parents[1] / "coach_app" / "static"
