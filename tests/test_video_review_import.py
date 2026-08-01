@@ -286,6 +286,59 @@ class VideoReviewImportTests(TestCase):
         self.assertIn("intenzitet_pokreta_0_100", result["events"][0])
         self.assertEqual(model.track_calls, 3)
 
+    def test_run_pose_analysis_rejects_distant_blue_track_during_dropout(self):
+        frames = [np.zeros((100, 160, 3), dtype=np.uint8) for _ in range(3)]
+        frames[1][:, :, 0] = 255
+        capture = _FakeCapture(frames, fps=10.0)
+        model = _FakePoseModel(
+            [
+                _FakeResult([((0, 0, 20, 80), 7, self._keypoints(0.0))]),
+                _FakeResult([((100, 0, 120, 80), 8, self._keypoints(100.0))]),
+                _FakeResult([((0, 0, 20, 80), 7, self._keypoints(0.0))]),
+            ]
+        )
+
+        result = run_pose_analysis(
+            Path("sony.mp4"),
+            0.0,
+            0.3,
+            (0, 0, 20, 80),
+            model=model,
+            video_capture_factory=lambda _path: capture,
+            fps=10.0,
+        )
+
+        dropout = result["frame_metrics"][1]
+        self.assertFalse(dropout["vidljivo"])
+        self.assertTrue(dropout["interpolirano"])
+        self.assertEqual(result["selected_track_id"], 7)
+
+    def test_run_pose_analysis_rejects_distant_reused_track_id(self):
+        frames = [np.zeros((100, 160, 3), dtype=np.uint8) for _ in range(3)]
+        capture = _FakeCapture(frames, fps=10.0)
+        model = _FakePoseModel(
+            [
+                _FakeResult([((0, 0, 20, 80), 7, self._keypoints(0.0))]),
+                _FakeResult([((100, 0, 120, 80), 7, self._keypoints(100.0))]),
+                _FakeResult([((0, 0, 20, 80), 7, self._keypoints(0.0))]),
+            ]
+        )
+
+        result = run_pose_analysis(
+            Path("sony.mp4"),
+            0.0,
+            0.3,
+            (0, 0, 20, 80),
+            model=model,
+            video_capture_factory=lambda _path: capture,
+            fps=10.0,
+        )
+
+        reused_id = result["frame_metrics"][1]
+        self.assertFalse(reused_id["vidljivo"])
+        self.assertTrue(reused_id["interpolirano"])
+        self.assertEqual(result["selected_track_id"], 7)
+
     def test_run_pose_analysis_samples_source_stride_and_preserves_timestamps(self):
         frames = [self._pose_frame(float(index)) for index in range(10)]
         capture = _FakeCapture(frames, fps=10.0)

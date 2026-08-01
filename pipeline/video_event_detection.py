@@ -68,6 +68,32 @@ def select_blue_track_id(detections: Sequence[Any], seed_bbox: Any) -> Any | Non
 select_seed_track = select_blue_detection
 
 
+def spatially_continuous(
+    candidate: Any,
+    previous_bbox: Any,
+    *,
+    max_distance_factor: float = 1.0,
+) -> bool:
+    """Reject identity jumps larger than the tracked person's box size."""
+    factor = float(max_distance_factor)
+    if not isfinite(factor) or factor <= 0.0:
+        raise ValueError("max_distance_factor must be finite and positive")
+    previous = _bbox(previous_bbox)
+    current = _bbox(candidate)
+    previous_center = (
+        (previous[0] + previous[2]) / 2.0,
+        (previous[1] + previous[3]) / 2.0,
+    )
+    current_center = (
+        (current[0] + current[2]) / 2.0,
+        (current[1] + current[3]) / 2.0,
+    )
+    distance = float(np.linalg.norm(np.asarray(current_center) - previous_center))
+    previous_size = max(previous[2] - previous[0], previous[3] - previous[1])
+    current_size = max(current[2] - current[0], current[3] - current[1])
+    return distance <= factor * max(previous_size, current_size)
+
+
 def _candidate_value(candidate: Any, key: str, default: Any = None) -> Any:
     if isinstance(candidate, Mapping):
         return candidate.get(key, default)
@@ -130,20 +156,20 @@ def recover_blue_pose(
     caller when evidence is unavailable or incompatible.
     """
     previous = _bbox(previous_bbox)
-    previous_center = ((previous[0] + previous[2]) / 2.0,
-                       (previous[1] + previous[3]) / 2.0)
-    previous_size = max(previous[2] - previous[0], previous[3] - previous[1])
     compatible = []
     for candidate in candidates:
         try:
             box = _bbox(candidate)
         except (TypeError, ValueError):
             continue
-        center = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
-        distance = float(np.linalg.norm(np.asarray(center) - previous_center))
-        candidate_size = max(box[2] - box[0], box[3] - box[1])
-        if distance > 2.0 * max(previous_size, candidate_size):
+        if not spatially_continuous(candidate, previous):
             continue
+        center = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+        previous_center = (
+            (previous[0] + previous[2]) / 2.0,
+            (previous[1] + previous[3]) / 2.0,
+        )
+        distance = float(np.linalg.norm(np.asarray(center) - previous_center))
         if frame is None:
             return None
         blue = blue_dominant_torso(frame, box, minimum_blue_fraction)
@@ -433,6 +459,7 @@ __all__ = [
     "select_blue_detection",
     "select_blue_track_id",
     "select_seed_track",
+    "spatially_continuous",
     "suggest_event_metrics",
     "suggest_event_windows",
 ]

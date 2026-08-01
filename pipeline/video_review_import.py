@@ -27,6 +27,7 @@ from pipeline.video_event_detection import (
     recovery_to_stable_s,
     recover_blue_pose,
     select_blue_detection,
+    spatially_continuous,
     suggest_event_metrics,
 )
 from pipeline.video_pose_metrics import json_safe
@@ -365,6 +366,12 @@ def run_pose_analysis(
                 ),
                 None,
             )
+            if (
+                selected is not None
+                and previous_bbox is not None
+                and not spatially_continuous(selected, previous_bbox)
+            ):
+                selected = None
             if selected is None and previous_bbox is not None:
                 selected = recover_blue_pose(
                     candidates,
