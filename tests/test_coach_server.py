@@ -507,6 +507,23 @@ class CoachServerTests(unittest.TestCase):
         self.assertIn("event.analysis_fingerprint || event.event_revision", app_js)
         self.assertIn("encodeURIComponent(String(mediaVersion))", app_js)
 
+    def test_playback_sync_avoids_repeated_iphone_seeks(self):
+        static = Path(__file__).parents[1] / "coach_app" / "static"
+        app_js = (static / "app.js").read_text(
+            encoding="utf-8"
+        )
+        html = (static / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('src="/static/app.js?v=playback-sync-1"', html)
+        self.assertIn("function correctIphonePlayback", app_js)
+        self.assertIn("Promise.all([sony.play(), iphone.play()])", app_js)
+        self.assertIn("iphone.playbackRate = clamp", app_js)
+        self.assertEqual(app_js.count("iphone.currentTime = times.iphoneLocalTime;"), 1)
+        self.assertNotIn(
+            'sony.addEventListener("play", () => { if (iphone.paused)',
+            app_js,
+        )
+
     def test_injury_editor_state_disables_trainer_controls_and_reenables_normal_events(self):
         app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
             encoding="utf-8"

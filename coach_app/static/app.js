@@ -13,6 +13,9 @@
   };
   const MIN_EVENT_SPAN = 0.001;
   const DRAFT_EVENT_SPAN = 1;
+  const HARD_SYNC_THRESHOLD_S = 0.12;
+  const MAX_PLAYBACK_RATE_CORRECTION = 0.04;
+  const PLAYBACK_RATE_GAIN = 0.8;
 
   function status(message, error = false) {
     const node = $("#app-status");
@@ -93,7 +96,25 @@
     state.syncing = true;
     sony.currentTime = times.sonyLocalTime;
     iphone.currentTime = times.iphoneLocalTime;
+    iphone.playbackRate = 1;
     state.syncing = false;
+  }
+
+  function correctIphonePlayback(times, hardSync = false) {
+    const target = Number(times?.iphoneLocalTime);
+    const current = Number(iphone.currentTime);
+    if (!Number.isFinite(target) || !Number.isFinite(current)) return;
+    const drift = target - current;
+    if (hardSync || iphone.paused || Math.abs(drift) >= HARD_SYNC_THRESHOLD_S) {
+      if (Math.abs(drift) > 0.001) iphone.currentTime = target;
+      iphone.playbackRate = 1;
+      return;
+    }
+    iphone.playbackRate = clamp(
+      1 + drift * PLAYBACK_RATE_GAIN,
+      1 - MAX_PLAYBACK_RATE_CORRECTION,
+      1 + MAX_PLAYBACK_RATE_CORRECTION,
+    );
   }
 
   function seekSony(globalSonyTime) {
@@ -762,8 +783,18 @@
   });
 
   $("#master-seek").addEventListener("input", (event) => seekSony(event.target.value));
-  $("[data-action='toggle-play']").addEventListener("click", () => {
-    if (sony.paused) sony.play().catch(() => {}); else sony.pause();
+  $("[data-action='toggle-play']").addEventListener("click", async () => {
+    if (!sony.paused) {
+      sony.pause();
+      iphone.pause();
+      return;
+    }
+    try {
+      await Promise.all([sony.play(), iphone.play()]);
+    } catch (_error) {
+      sony.pause();
+      iphone.pause();
+    }
   });
   $("[data-action='step-back']").addEventListener("click", () => stepFrame(-1));
   $("[data-action='step-forward']").addEventListener("click", () => stepFrame(1));
@@ -779,16 +810,22 @@
         Number(state.selected.sony_end_s),
       );
       const times = localTimesForGlobal(state.globalSonyTime, state.selected);
-      state.syncing = true;
-      iphone.currentTime = times.iphoneLocalTime;
-      state.syncing = false;
+      correctIphonePlayback(times);
       updateReadout();
       updateCorrectionControls();
       drawCharts();
     }
   });
-  sony.addEventListener("play", () => { if (iphone.paused) iphone.play().catch(() => {}); });
-  sony.addEventListener("pause", () => { if (!iphone.paused) iphone.pause(); });
+  sony.addEventListener("pause", () => {
+    if (!iphone.paused) iphone.pause();
+    if (state.selected) {
+      const times = localTimesForGlobal(
+        globalSonyTimeForLocal(sony.currentTime, state.selected),
+        state.selected,
+      );
+      correctIphonePlayback(times, true);
+    }
+  });
 
   $("#sync-button").addEventListener("click", async () => {
     if (state.review?.sync_locked) return;
