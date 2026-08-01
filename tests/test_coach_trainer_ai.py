@@ -408,6 +408,41 @@ class CoachTrainerAiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(feedback["assessment"]["odnos"], "slazem_se")
 
+    def test_http_reports_hide_ai_until_reveal_and_then_include_trace_data(self):
+        server = self.start_server()
+
+        def reports():
+            values = []
+            for name in ("izvestaj.csv", "izvestaj.md"):
+                with urlopen(server.base_url + "/" + name) as response:
+                    values.append(response.read().decode("utf-8"))
+            return values
+
+        for report in reports():
+            self.assertNotIn("deterministicki-v1", report)
+            self.assertNotIn("video_pose_proxy_v1", report)
+
+        self.read_json(
+            server.base_url + "/api/events/e-001/trainer-assessments",
+            method="POST",
+            payload=self.visible_assessment(),
+        )
+        for report in reports():
+            self.assertIn("kukovi kasne za rotacijom", report)
+            self.assertNotIn("deterministicki-v1", report)
+            self.assertNotIn("video_pose_proxy_v1", report)
+
+        self.now += timedelta(seconds=1)
+        self.read_json(
+            server.base_url + "/api/events/e-001/ai-reveal",
+            method="POST",
+            payload={},
+        )
+        for report in reports():
+            self.assertIn("deterministicki-v1", report)
+            self.assertIn("video_pose_proxy_v1", report)
+            self.assertIn("sony_s", report)
+
     def test_http_denies_internal_review_and_analysis_paths(self):
         server = self.start_server()
         for path in (
