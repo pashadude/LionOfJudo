@@ -68,6 +68,48 @@ class VideoReviewCliTests(unittest.TestCase):
         self.assertEqual(status, 0)
         mock_migrate.assert_called_once_with(Path("session"))
 
+    def test_migrate_ai_parser_accepts_safe_output_and_privacy_options(self):
+        args = build_parser().parse_args(
+            [
+                "migrate-ai",
+                "--session-dir", "corrected-session",
+                "--output-dir", "trainer-ai-session",
+                "--model-path", "/tmp/yolo11x-pose.pt",
+                "--device", "mps",
+                "--replace-derived",
+            ]
+        )
+
+        self.assertEqual(args.session_dir, Path("corrected-session"))
+        self.assertEqual(args.output_dir, Path("trainer-ai-session"))
+        self.assertEqual(args.model_path, Path("/tmp/yolo11x-pose.pt"))
+        self.assertEqual(args.device, "mps")
+        self.assertTrue(args.replace_derived)
+
+    @patch("tools.video_review.migrate_ai_session")
+    def test_migrate_ai_command_forwards_safe_migration_options(self, mock_migrate):
+        mock_migrate.return_value = Path("trainer-ai-session/review.json")
+
+        status = main(
+            [
+                "migrate-ai",
+                "--session-dir", "corrected-session",
+                "--output-dir", "trainer-ai-session",
+                "--model-path", "/tmp/yolo11x-pose.pt",
+                "--device", "cpu",
+                "--replace-derived",
+            ]
+        )
+
+        self.assertEqual(status, 0)
+        mock_migrate.assert_called_once_with(
+            Path("corrected-session"),
+            Path("trainer-ai-session"),
+            model_path=Path("/tmp/yolo11x-pose.pt"),
+            device="cpu",
+            replace_derived=True,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

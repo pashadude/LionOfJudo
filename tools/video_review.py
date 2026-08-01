@@ -13,7 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from pipeline.video_review_import import import_session
-from pipeline.video_review_migration import migrate_session
+from pipeline.video_review_migration import migrate_ai_session, migrate_session
 from coach_app.server import create_server
 
 
@@ -64,6 +64,18 @@ def _serve_command(args: argparse.Namespace) -> int:
 def _migrate_command(args: argparse.Namespace) -> int:
     review_path = migrate_session(args.session_dir)
     print(f"Migracija završena: {review_path}")
+    return 0
+
+
+def _migrate_ai_command(args: argparse.Namespace) -> int:
+    review_path = migrate_ai_session(
+        args.session_dir,
+        args.output_dir,
+        model_path=args.model_path,
+        device=args.device,
+        replace_derived=args.replace_derived,
+    )
+    print(f"AI sesija spremna: {review_path}")
     return 0
 
 
@@ -136,6 +148,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="direktorijum postojeće sesije sa review.json",
     )
     migrate_parser.set_defaults(handler=_migrate_command)
+
+    migrate_ai_parser = subparsers.add_parser(
+        "migrate-ai",
+        help="napravi odvojenu v3 sesiju i regeneriši privatne medije",
+    )
+    migrate_ai_parser.add_argument(
+        "--session-dir",
+        required=True,
+        type=Path,
+        help="izvorna korigovana sesija sa review.json",
+    )
+    migrate_ai_parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=Path,
+        help="novi direktorijum za trainer/AI sesiju",
+    )
+    migrate_ai_parser.add_argument(
+        "--model-path",
+        required=True,
+        type=Path,
+        help="lokalna YOLO pose težina; ništa se ne preuzima",
+    )
+    migrate_ai_parser.add_argument(
+        "--device",
+        default="mps",
+        help="uređaj za lokalni YOLO (mps, cpu ili cuda:0)",
+    )
+    migrate_ai_parser.add_argument(
+        "--replace-derived",
+        action="store_true",
+        help="atomski zameni postojeći output tek posle pune verifikacije",
+    )
+    migrate_ai_parser.set_defaults(handler=_migrate_ai_command)
 
     serve_parser = subparsers.add_parser(
         "serve", help="pokreni lokalni pregled u pregledaču"
