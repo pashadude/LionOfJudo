@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 import cv2
@@ -10,6 +10,7 @@ from pipeline.face_blur import (
     BlurReport,
     PrivacyVerificationError,
     _blur_ellipse,
+    _mux_original_audio,
     _pose_heads,
     _region_is_obscured,
     _yunet_faces,
@@ -171,6 +172,109 @@ class FaceBlurTests(unittest.TestCase):
         core = frame[45:55, 45:55]
         self.assertEqual(np.unique(core.reshape(-1, 3), axis=0).shape[0], 1)
 
+    def test_overlapping_candidates_cannot_restore_each_others_visible_core(self):
+        frame = np.zeros((120, 220, 3), dtype=np.uint8)
+        frame[:, :110] = (20, 20, 240)
+        frame[:, 110:] = (240, 20, 20)
+        writer = FakeWriter()
+
+        blur_all_faces(
+            object(),
+            Path("input.mp4"),
+            Path("output.mp4"),
+            "cpu",
+            capture_factory=lambda _path: FakeCapture([frame]),
+            writer_factory=lambda *_args: writer,
+            yunet=object(),
+            candidate_detector=lambda *_args, **_kwargs: [
+                (90, 60, 30),
+                (125, 60, 30),
+            ],
+        )
+
+        output = writer.frames[0]
+        self.assertTrue(_region_is_obscured(output, 90, 60, 30))
+        self.assertTrue(_region_is_obscured(output, 125, 60, 30))
+
+    def test_overlapping_privacy_cores_survive_video_encoding(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            source = root / "source.mp4"
+            private = root / "private.mp4"
+            frame = np.zeros((120, 220, 3), dtype=np.uint8)
+            frame[:, :110] = (20, 20, 240)
+            frame[:, 110:] = (240, 20, 20)
+            writer = cv2.VideoWriter(
+                str(source),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                10.0,
+                (220, 120),
+            )
+            for _ in range(3):
+                writer.write(frame)
+            writer.release()
+            detector = lambda *_args, **_kwargs: [
+                (103, 60, 12),
+                (117, 60, 12),
+            ]
+
+            blur_report = blur_all_faces(
+                object(),
+                source,
+                private,
+                "cpu",
+                yunet=object(),
+                candidate_detector=detector,
+            )
+            verify_report = verify_blurred_against_source(
+                object(),
+                source,
+                private,
+                "cpu",
+                yunet=object(),
+                candidate_detector=detector,
+            )
+
+            self.assertIsNone(blur_report.failure_reason)
+            self.assertTrue(verify_report.privacy_verified)
+
+    def test_minimum_radius_core_survives_hd_video_encoding(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            source = root / "source.mp4"
+            private = root / "private.mp4"
+            rng = np.random.default_rng(19)
+            frame = rng.integers(0, 256, size=(720, 1686, 3), dtype=np.uint8)
+            writer = cv2.VideoWriter(
+                str(source),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                30.0,
+                (1686, 720),
+            )
+            writer.write(frame)
+            writer.write(np.roll(frame, 2, axis=1))
+            writer.release()
+            detector = lambda *_args, **_kwargs: [(636, 303, 12)]
+
+            blur_all_faces(
+                object(),
+                source,
+                private,
+                "cpu",
+                yunet=object(),
+                candidate_detector=detector,
+            )
+            report = verify_blurred_against_source(
+                object(),
+                source,
+                private,
+                "cpu",
+                yunet=object(),
+                candidate_detector=detector,
+            )
+
+            self.assertTrue(report.privacy_verified)
+
     def test_verification_requires_zero_candidates_and_complete_decode(self):
         frame = self.checkerboard()
         clean = verify_blurred_clip(
@@ -263,6 +367,18 @@ class FaceBlurTests(unittest.TestCase):
 
         self.assertFalse(report.privacy_verified)
         self.assertIn("detektor", report.failure_reason)
+
+    @patch("pipeline.face_blur.subprocess.run")
+    def test_audio_mux_never_trims_verified_video_frames(self, mock_run):
+        _mux_original_audio(
+            Path("private-video.mp4"),
+            Path("source-audio.mp4"),
+            Path("muxed.mp4"),
+        )
+
+        command = mock_run.call_args.args[0]
+        self.assertIn("copy", command)
+        self.assertNotIn("-shortest", command)
 
     def test_private_publish_replaces_output_only_after_final_clean_verification(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -376,6 +492,46 @@ class FaceBlurTests(unittest.TestCase):
 
             self.assertEqual(output.read_bytes(), b"old-private")
             self.assertFalse(any(path.name.startswith(".final.") for path in root.iterdir()))
+
+    def test_default_private_pipeline_detects_each_source_frame_once(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            source = root / "raw.mp4"
+            output = root / "final.mp4"
+            writer = cv2.VideoWriter(
+                str(source),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                10.0,
+                (200, 100),
+            )
+            writer.write(self.checkerboard())
+            writer.write(np.flipud(self.checkerboard()))
+            writer.release()
+            model = Mock()
+            result = Mock()
+            result.keypoints = None
+            model.predict.return_value = [result, result]
+            yunet = Mock()
+            yunet.detect.return_value = (None, None)
+
+            def copy_video(video, _audio, destination):
+                Path(destination).write_bytes(Path(video).read_bytes())
+                return Path(destination)
+
+            with patch("pipeline.face_blur._load_yunet", return_value=yunet):
+                report = privatize_media(
+                    model,
+                    source,
+                    output,
+                    "cpu",
+                    audio_muxer=copy_video,
+                )
+
+            self.assertTrue(report.privacy_verified)
+            self.assertEqual(report.total_frames, 2)
+            self.assertEqual(model.predict.call_count, 1)
+            batch = model.predict.call_args.args[0]
+            self.assertEqual(len(batch), 2)
 
 
 if __name__ == "__main__":

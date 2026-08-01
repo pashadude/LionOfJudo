@@ -65,6 +65,37 @@ class VideoReviewImportTests(TestCase):
         self.assertIn("-map", command)
         self.assertIn("0:a?", command)
 
+    @patch("pipeline.video_review_import.subprocess.run")
+    def test_side_by_side_can_export_only_the_confirmed_session_window(self, mock_run):
+        def create_output(command, **_kwargs):
+            Path(command[-1]).write_bytes(b"video")
+
+        mock_run.side_effect = create_output
+        with self._temporary_directory() as output_dir, patch(
+            "pipeline.video_review_import.probe_duration",
+            return_value=8.0,
+        ):
+            make_side_by_side(
+                Path("sony.mp4"),
+                Path("iphone.mov"),
+                slope=1.0,
+                intercept=-3.0,
+                end_s=136.0,
+                output=Path(output_dir) / "out.mp4",
+                start_s=128.0,
+            )
+
+        command = mock_run.call_args.args[0]
+        self.assertEqual(
+            [command[index + 1] for index, value in enumerate(command) if value == "-ss"],
+            ["128.000", "131.000"],
+        )
+        self.assertEqual(
+            [command[index + 1] for index, value in enumerate(command) if value == "-t"],
+            ["8.000", "8.000"],
+        )
+        self.assertIn("setpts=PTS-STARTPTS", " ".join(command))
+
     def test_side_by_side_rejects_missing_output_after_ffmpeg(self):
         with patch("pipeline.video_review_import.subprocess.run"):
             with self._temporary_directory() as raw_root:
@@ -529,7 +560,7 @@ class VideoReviewImportTests(TestCase):
             with patch(
                 "pipeline.video_review_import.cut_clip",
                 side_effect=self._touch_result,
-            ), patch(
+            ) as mock_cut, patch(
                 "pipeline.video_review_import.probe_duration",
                 return_value=1.0,
             ):
@@ -543,6 +574,7 @@ class VideoReviewImportTests(TestCase):
                         reject,
                     )
 
+            self.assertEqual(mock_cut.call_args.kwargs["scale_height"], 1080)
             self.assertEqual(output.read_bytes(), b"previous-verified")
 
     @patch("pipeline.video_review_import.run_pose_analysis", return_value=[])

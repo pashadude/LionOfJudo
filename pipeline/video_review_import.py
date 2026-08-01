@@ -132,38 +132,64 @@ def make_side_by_side(
     end_s: float,
     output: Path,
     height: int = 720,
+    start_s: float = 0.0,
 ) -> Path:
     """Export Sony-master side-by-side video with Sony audio retained."""
     slope = _finite(slope, "slope")
     intercept = _finite(intercept, "intercept")
     end_s = _finite(end_s, "end_s")
+    start_s = _finite(start_s, "start_s")
     if slope <= 0.0:
         raise ValueError("slope vremenske mape mora biti pozitivan")
-    if end_s <= 0.0:
-        raise ValueError("kraj side-by-side prozora mora biti pozitivan")
+    if start_s < 0.0 or end_s <= start_s:
+        raise ValueError("side-by-side prozor mora imati validan početak i kraj")
     if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
         raise ValueError("visina side-by-side izvoza mora biti pozitivan ceo broj")
 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    sony_filter = (
-        f"[0:v]trim=start=0:end={end_s:.3f},setpts=PTS-STARTPTS,"
-        f"scale=-2:{height}[sony]"
-    )
-    iphone_filter = (
-        f"[1:v]setpts={_format_number(slope)}*PTS"
-        f"{_signed_number(intercept)}/TB,scale=-2:{height}[iphone]"
-    )
+    duration_s = end_s - start_s
+    input_arguments = ["-i", str(sony), "-i", str(iphone)]
+    if start_s == 0.0:
+        sony_filter = (
+            f"[0:v]trim=start=0:end={end_s:.3f},setpts=PTS-STARTPTS,"
+            f"scale=-2:{height}[sony]"
+        )
+        iphone_filter = (
+            f"[1:v]setpts={_format_number(slope)}*PTS"
+            f"{_signed_number(intercept)}/TB,scale=-2:{height}[iphone]"
+        )
+    else:
+        iphone_start_s = (start_s - intercept) / slope
+        if iphone_start_s < 0.0:
+            raise ValueError("mapirani iPhone početak je pre početka videa")
+        iphone_duration_s = duration_s / slope
+        input_arguments = [
+            "-ss",
+            f"{start_s:.3f}",
+            "-t",
+            f"{duration_s:.3f}",
+            "-i",
+            str(sony),
+            "-ss",
+            f"{iphone_start_s:.3f}",
+            "-t",
+            f"{iphone_duration_s:.3f}",
+            "-i",
+            str(iphone),
+        ]
+        sony_filter = f"[0:v]setpts=PTS-STARTPTS,scale=-2:{height}[sony]"
+        iphone_filter = (
+            f"[1:v]setpts={_format_number(slope)}*(PTS-STARTPTS),"
+            f"scale=-2:{height}[iphone]"
+        )
     filter_complex = f"{sony_filter};{iphone_filter};[sony][iphone]hstack=inputs=2:shortest=1[v]"
     command = [
         "ffmpeg",
         "-v",
         "error",
         "-y",
-        "-i",
-        str(sony),
-        "-i",
-        str(iphone),
+        *input_arguments,
         "-filter_complex",
         filter_complex,
         "-map",
@@ -186,7 +212,7 @@ def make_side_by_side(
     subprocess.run(command, check=True, capture_output=True)
     verify_media_export(
         output,
-        end_s,
+        duration_s,
         EXPORT_TOLERANCE_S,
         probe=probe_duration,
     )
@@ -585,12 +611,20 @@ def _export_clip(
     end_s: float,
     output: Path,
     source_duration_s: float,
+    *,
+    scale_height: int | None = None,
 ) -> Path | None:
     window = _window_for_clip(start_s, end_s, source_duration_s)
     if window is None:
         return None
     start, end = window
-    result = cut_clip(source, start, end, output)
+    result = cut_clip(
+        source,
+        start,
+        end,
+        output,
+        scale_height=scale_height,
+    )
     verify_media_export(
         result,
         end - start,
@@ -615,7 +649,12 @@ def _export_private_clip(
     ) as raw:
         raw_path = Path(raw) / output.name
         exported = _export_clip(
-            source, start_s, end_s, raw_path, source_duration_s
+            source,
+            start_s,
+            end_s,
+            raw_path,
+            source_duration_s,
+            scale_height=1080,
         )
         if exported is None:
             return None
