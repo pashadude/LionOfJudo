@@ -45,17 +45,44 @@ Pregledaj kratke isečke ili kontakt-tablice oko oba kandidata i preseka povrede
 3. da je izabrani sportista plav i da se njegov seed okvir jasno vidi u Sony kadru;
 4. da je presek povrede na Sony osi posle udarca i klečanja, a pre normalnih statistika.
 
-Primer kratkog preflight isečka, bez izmene izvora:
+Tačne preflight komande za potvrđene kandidate, bez izmene izvora:
 
 ```bash
-ffmpeg -hide_banner -loglevel error -ss 108 -i "$SONY" -t 8 \
+PREFLIGHT=/private/tmp/lionjudo-video-review-session/preflight
+
+# Prvi trostruki tap: Sony 9.788125/10.192875/10.665250, iPhone 28.395750/28.685000/29.158500.
+ffmpeg -hide_banner -loglevel error -ss 8.5 -i "$SONY" -t 3.5 \
   -vf "scale=960:-2" -c:v libx264 -crf 28 -an \
-  /private/tmp/lionjudo-video-review-session/preflight/sony_second.mp4
-ffmpeg -hide_banner -loglevel error -ss 128 -i "$IPHONE" -t 8 \
+  "$PREFLIGHT/sony_first_triple.mp4"
+ffmpeg -hide_banner -loglevel error -ss 27.2 -i "$IPHONE" -t 3.5 \
   -vf "scale=960:-2" -c:v libx264 -crf 28 -an \
-  /private/tmp/lionjudo-video-review-session/preflight/iphone_second.mp4
-ffprobe -v error -show_entries format=duration,size -of json \
-  /private/tmp/lionjudo-video-review-session/preflight/sony_second.mp4
+  "$PREFLIGHT/iphone_first_triple.mp4"
+
+# Drugi trostruki tap: Sony 110.862625/111.124000/111.426625, iPhone 130.359125/130.567875/130.878000.
+ffmpeg -hide_banner -loglevel error -ss 109.5 -i "$SONY" -t 3.5 \
+  -vf "scale=960:-2" -c:v libx264 -crf 28 -an \
+  "$PREFLIGHT/sony_second_triple.mp4"
+ffmpeg -hide_banner -loglevel error -ss 129.1 -i "$IPHONE" -t 3.5 \
+  -vf "scale=960:-2" -c:v libx264 -crf 28 -an \
+  "$PREFLIGHT/iphone_second_triple.mp4"
+
+# Povreda: početak bacanja iPhone ~143.8 s, udar ~145.2 s, klečanje ~146.7 s; Sony cutoff 126.0 s.
+ffmpeg -hide_banner -loglevel error -ss 124.5 -i "$SONY" -t 3.5 \
+  -vf "scale=960:-2" -c:v libx264 -crf 28 -an \
+  "$PREFLIGHT/sony_injury_cutoff.mp4"
+ffmpeg -hide_banner -loglevel error -ss 142.5 -i "$IPHONE" -t 5.0 \
+  -vf "scale=960:-2" -c:v libx264 -crf 28 -an \
+  "$PREFLIGHT/iphone_injury.mp4"
+
+# Kontakt-tablice za brzu proveru sadržaja svakog kandidata i povrede.
+for clip in "$PREFLIGHT"/*triple.mp4 "$PREFLIGHT"/*injury*.mp4; do
+  name="${clip%.mp4}"
+  ffmpeg -hide_banner -loglevel error -i "$clip" -vf "fps=2,scale=480:-2,tile=4x3" -frames:v 1 \
+    -q:v 3 "${name}_contact.jpg"
+done
+
+find "$PREFLIGHT" -type f \( -name '*.mp4' -o -name '*.jpg' \) -print0 | \
+  xargs -0 -n1 ffprobe -v error -show_entries format=duration,size -of compact=print
 ```
 
 ## Import i potvrde
@@ -63,32 +90,25 @@ ffprobe -v error -show_entries format=duration,size -of json \
 Import zahteva dve potvrđene `AnchorPair` vrednosti. `sony_s` i `iphone_s` su sekunde na odgovarajućim fajlovima, `user_confirmed` mora biti `true`, a `triple_tap_count` tačno `3`. Primer poziva iz korena projekta:
 
 ```bash
-python - <<'PY'
-from pathlib import Path
-from pipeline.video_review_contract import AnchorPair
-from pipeline.video_review_import import import_session
+cd /private/tmp/LionOfJudo-video-review
+ANCHORS=/private/tmp/lionjudo-video-review-session/anchors.json
+mkdir -p "$(dirname "$ANCHORS")"
+printf '%s\n' '{"anchors":[{"name":"pocetak","sony_s":10.192875,"iphone_s":28.685000,"user_confirmed":true,"triple_tap_count":3},{"name":"kontrola","sony_s":111.124000,"iphone_s":130.567875,"user_confirmed":true,"triple_tap_count":3}]}' > "$ANCHORS"
 
-import_session(
-    sony=Path("/Volumes/Untitled/PRIVATE/M4ROOT/CLIP/C0007.MP4"),
-    iphone=Path("/Users/pauldudko/Downloads/IMG_3852.mov"),
-    output_dir=Path("/private/tmp/lionjudo-video-review-session/session"),
-    anchors=[
-        AnchorPair("pocetak", sony_s=10.000, iphone_s=30.000, user_confirmed=True, triple_tap_count=3),
-        AnchorPair("kontrola", sony_s=110.863, iphone_s=130.359, user_confirmed=True, triple_tap_count=3),
-    ],
-    injury_cutoff_s=126.000,
-    blue_seed=(x, y, x + w, y + h),
-)
-PY
+/Users/pauldudko/VSProjects/LionOfJudo/.venv/bin/python tools/video_review.py import \
+  --sony /Volumes/Untitled/PRIVATE/M4ROOT/CLIP/C0007.MP4 \
+  --iphone /Users/pauldudko/Downloads/IMG_3852.mov \
+  --session-dir /private/tmp/lionjudo-video-review-session/session \
+  --anchors-json "$ANCHORS" \
+  --injury-cutoff-sony-s 126.000 \
+  --blue-seed-sony 1897,887,2081,1486 \
+  --analysis-fps 3.0 \
+  --model-path /Users/pauldudko/VSProjects/LionOfJudo/yolo11x-pose.pt \
+  --device mps \
+  --event-threshold 0.4
 ```
 
-Pošto importer učitava podrazumevanu težinu `yolo11x-pose.pt` iz trenutnog direktorijuma, a težina može biti van projekta, pripremi lokalni link pre gornjeg poziva:
-
-```bash
-ln -s "$MODEL" yolo11x-pose.pt
-```
-
-U gornjem primeru zameni `x, y, w, h` koordinatama potvrđenim na jasnom Sony kadru; importeru se prosleđuju izvedeni uglovi `(x1, y1, x2, y2)`, dok se u izveštaju beleži `(x, y, w, h)`. Link mora pokazivati na postojeću lokalnu težinu; ne dozvoli automatsko preuzimanje. Import pravi `review.json`, analize, preview fajlove, klipove događaja i `media/session_side_by_side.mp4`. Ne pokreći import preko već anotirane sesije; za novu obradu koristi prazan direktorijum. `force_reimport=True` je dozvoljen samo kada je očuvanje postojeće trenerove beleške namerno provereno.
+Prvi potvrđeni anker je `10.192875` s na Sony osi, pa normalna pose analiza počinje tamo; pre-ankerski video se ne uključuje. Seed je potvrđen na Sony kadru `10.210` s i importeru se prosleđuju uglovi `(1897,887,2081,1486)` (oblik `x,y,w,h` je `1897,887,184,599`). `--analysis-fps 3.0` obrađuje deterministički svaki izabrani izvorni kadar po strajdu, čuva njegov izvorni timestamp i koristi efektivnu stopu za konačne razlike. To je grubo uzorkovanje video-pokreta; preskočeni kadrovi se ne izmišljaju. U ovom realnom prototipu `--event-threshold 0.4` je eksplicitno snižen da bi se uzorci na gruboj stopi obuhvatili; podrazumevana vrednost bez ove opcije ostaje `0.5`. Lokalna težina mora postojati; importer odbija nepostojeću težinu i ne preuzima model. Import pravi `review.json`, analize, preview fajlove, klipove događaja i `media/session_side_by_side.mp4`. Ne pokreći import preko već anotirane sesije; za novu obradu koristi prazan direktorijum. `force_reimport=True` je dozvoljen samo kada je očuvanje postojeće trenerove beleške namerno provereno.
 
 Pre nastavka proveri svaku isporučenu datoteku:
 
@@ -105,17 +125,8 @@ Pregledaj side-by-side i nezavisne plejere na početnom ankeru, drugom ankeru, j
 Server sluša samo na loopback adresi. Port `0` bira prvi slobodan port:
 
 ```bash
-python - <<'PY'
-from pathlib import Path
-from coach_app.server import create_server
-
-server = create_server(Path("/private/tmp/lionjudo-video-review-session/session"), port=0)
-print(server.base_url)
-try:
-    server.start_in_thread().join()
-except KeyboardInterrupt:
-    server.shutdown()
-PY
+/Users/pauldudko/VSProjects/LionOfJudo/.venv/bin/python tools/video_review.py serve \
+  --session-dir /private/tmp/lionjudo-video-review-session/session --port 0
 ```
 
 U pregledaču proveri srpsko-latinične oznake, oba jednaka video prikaza, izbor događaja, sinhronizovano traženje i klik na grafikon, `Sačuvaj`, kao i neposredne `/izvestaj.csv` i `/izvestaj.md` izvoze. Povredni događaj mora imati oznaku `Prijavljen povredni događaj` i ostati samo za čitanje. To je namerno: snimak se čuva kao trag, ali se događaj ne koristi za normalnu statistiku niti za trening.

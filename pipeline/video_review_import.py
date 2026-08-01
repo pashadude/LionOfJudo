@@ -79,6 +79,40 @@ def _finite(value: object, field_name: str) -> float:
     return result
 
 
+ANALYSIS_LIMITATION = (
+    "Ograničenje: analiza video-pokreta koristi grubo uzorkovanje; "
+    "preskočeni kadrovi nisu rekonstruisani."
+)
+
+
+def _analysis_profile(
+    source_fps: float,
+    requested_analysis_fps: float | None,
+) -> dict[str, float | int | None | str]:
+    source = _finite(source_fps, "source_fps")
+    if source <= 0.0:
+        raise ValueError("source_fps mora biti pozitivan")
+    if requested_analysis_fps is None:
+        return {
+            "source_fps": source,
+            "requested_analysis_fps": None,
+            "effective_analysis_fps": source,
+            "stride": 1,
+            "analysis_limitation": ANALYSIS_LIMITATION,
+        }
+    requested = _finite(requested_analysis_fps, "analysis_fps")
+    if requested <= 0.0 or requested > source:
+        raise ValueError("analysis_fps mora biti konacan, pozitivan i ne veci od source_fps")
+    stride = max(1, int(round(source / requested)))
+    return {
+        "source_fps": source,
+        "requested_analysis_fps": requested,
+        "effective_analysis_fps": source / stride,
+        "stride": stride,
+        "analysis_limitation": ANALYSIS_LIMITATION,
+    }
+
+
 def _probe_optional_fps(video: Path) -> float | None:
     """Return a finite source FPS, or None when the optional probe is unavailable."""
     try:
@@ -225,6 +259,7 @@ def run_pose_analysis(
     device: str = "mps",
     model_path: Path | str = "yolo11x-pose.pt",
     event_threshold: float = 0.5,
+    analysis_fps: float | None = None,
 ) -> dict[str, Any]:
     """Track the coach-selected athlete and derive Task 3 video metrics.
 
@@ -252,8 +287,16 @@ def run_pose_analysis(
     fps_value = float(fps) if fps is not None else float(capture.get(fps_property) or 0.0)
     if not math.isfinite(fps_value) or fps_value <= 0.0:
         fps_value = probe_fps(Path(sony))
+    profile = _analysis_profile(fps_value, analysis_fps)
+    effective_fps = float(profile["effective_analysis_fps"])
+    stride = int(profile["stride"])
 
     if model is None:
+        model_path = Path(model_path).expanduser()
+        if not model_path.is_file():
+            raise FileNotFoundError(
+                f"lokalna YOLO težina nije pronađena; automatsko preuzimanje nije dozvoljeno: {model_path}"
+            )
         from ultralytics import YOLO
 
         model = YOLO(str(model_path))
@@ -261,9 +304,10 @@ def run_pose_analysis(
         for tracker in getattr(model.predictor, "trackers", []) or []:
             tracker.reset()
 
-    start_frame = int(math.floor(start_s * fps_value))
+    start_frame = int(math.ceil(start_s * fps_value))
     capture.set(position_property, start_frame)
-    frame_index = start_frame
+    source_frame_index = start_frame
+    next_sample_frame = start_frame
     pose_frames: list[np.ndarray] = []
     timestamps: list[float] = []
     previous_bbox: Any | None = None
@@ -274,12 +318,16 @@ def run_pose_analysis(
         ok, frame = capture.read()
         if not ok:
             break
-        timestamp = frame_index / fps_value
-        frame_index += 1
+        timestamp = source_frame_index / fps_value
+        current_source_frame = source_frame_index
+        source_frame_index += 1
         if timestamp < start_s:
             continue
         if timestamp >= end_s:
             break
+        if current_source_frame < next_sample_frame:
+            continue
+        next_sample_frame += stride
 
         result = model.track(frame, persist=True, verbose=False, device=device)[0]
         candidates = _tracking_candidates(result)
@@ -316,11 +364,11 @@ def run_pose_analysis(
         timestamps.append(float(timestamp))
 
     capture.release()
-    metrics = compute_pose_metrics(pose_frames, fps_value, timestamps)
+    metrics = compute_pose_metrics(pose_frames, effective_fps, timestamps)
     energy = motion_energy(metrics)
     suggested = suggest_event_metrics(
         energy,
-        fps_value,
+        effective_fps,
         float(event_threshold),
         injury_cutoff_s=end_s,
         timestamps=timestamps,
@@ -331,13 +379,22 @@ def run_pose_analysis(
         if event.status != "povreda"
     ]
     return {
-        "fps": fps_value,
+        "fps": effective_fps,
+        "source_fps": profile["source_fps"],
+        "requested_analysis_fps": profile["requested_analysis_fps"],
+        "effective_analysis_fps": profile["effective_analysis_fps"],
+        "stride": profile["stride"],
+        "analysis_start_s": start_s,
+        "analysis_limitation": profile["analysis_limitation"],
         "selected_track_id": selected_track_id,
         "blue_seed_sony": seed,
         "athlete_seen": selected_seen,
         "frame_metrics": [metric.to_dict() for metric in metrics],
         "motion_energy": json_safe(energy),
-        "events": [event.to_dict() for event in event_metrics],
+        "events": [
+            {"event_id": f"e-{index:03d}", **event.to_dict()}
+            for index, event in enumerate(event_metrics, start=1)
+        ],
     }
 
 
@@ -587,6 +644,10 @@ def import_session(
     transcript_path: Path | None = None,
     *,
     force_reimport: bool = False,
+    analysis_fps: float | None = None,
+    model_path: Path | str = "yolo11x-pose.pt",
+    device: str = "mps",
+    event_threshold: float = 0.5,
 ) -> Path:
     """Import one Sony-master session and return its canonical review path."""
     sony = Path(sony).expanduser().resolve()
@@ -620,7 +681,17 @@ def import_session(
     if injury_cutoff_s > sony_duration_s:
         raise ValueError("injury cutoff je posle kraja Sony videa")
 
-    pose_result = run_pose_analysis(sony, 0.0, injury_cutoff_s, blue_seed)
+    analysis_start_s = min(anchor.sony_s for anchor in anchor_values)
+    pose_result = run_pose_analysis(
+        sony,
+        analysis_start_s,
+        injury_cutoff_s,
+        blue_seed,
+        analysis_fps=analysis_fps,
+        model_path=model_path,
+        device=device,
+        event_threshold=event_threshold,
+    )
     if isinstance(pose_result, Mapping):
         frame_metrics = json_safe(list(pose_result.get("frame_metrics", [])))
         pose_events = pose_result.get("events", [])
@@ -634,19 +705,38 @@ def import_session(
         pose_events = pose_result
         pose_summary = {}
     if sony_fps is None:
-        fallback_fps = pose_summary.get("fps")
+        fallback_fps = (
+            pose_result.get("source_fps", pose_summary.get("fps"))
+            if isinstance(pose_result, Mapping)
+            else pose_summary.get("fps")
+        )
         try:
             sony_fps = _finite(fallback_fps, "sony_fps")
         except (TypeError, ValueError):
             sony_fps = None
     if sony_fps is None or sony_fps <= 0.0:
         raise ValueError("Sony FPS nije dostupan; uvoz ne može da potvrdi kadriranje")
+    profile = _analysis_profile(sony_fps, analysis_fps)
+    pose_summary = {
+        "fps": profile["effective_analysis_fps"],
+        "source_fps": profile["source_fps"],
+        "requested_analysis_fps": profile["requested_analysis_fps"],
+        "effective_analysis_fps": profile["effective_analysis_fps"],
+        "stride": profile["stride"],
+        "analysis_start_s": analysis_start_s,
+        "analysis_limitation": profile["analysis_limitation"],
+        "selected_track_id": pose_summary.get("selected_track_id"),
+        "athlete_seen": pose_summary.get("athlete_seen", False),
+    }
     sony_record["fps"] = sony_fps
     iphone_record["fps"] = iphone_fps
     events = []
-    for raw_event in pose_events:
+    for index, raw_event in enumerate(pose_events, start=1):
         if hasattr(raw_event, "to_dict"):
             raw_event = raw_event.to_dict()
+        if isinstance(raw_event, Mapping) and not raw_event.get("event_id"):
+            raw_event = dict(raw_event)
+            raw_event["event_id"] = f"e-{index:03d}"
         event = _event_payload(raw_event, injury_cutoff_s, time_map)
         if event is not None:
             events.append(event)
@@ -783,6 +873,12 @@ def import_session(
         "iphone_duration_s": iphone_duration_s,
         "sony_fps": sony_fps,
         "iphone_fps": iphone_fps,
+        "source_fps": profile["source_fps"],
+        "requested_analysis_fps": profile["requested_analysis_fps"],
+        "effective_analysis_fps": profile["effective_analysis_fps"],
+        "stride": profile["stride"],
+        "analysis_start_s": analysis_start_s,
+        "analysis_limitation": profile["analysis_limitation"],
         "anchors": [anchor.to_dict() for anchor in anchor_values],
         "time_map": time_map.to_dict(),
         "injury_cutoff_s": injury_cutoff_s,

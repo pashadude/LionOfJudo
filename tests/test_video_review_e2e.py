@@ -74,7 +74,7 @@ class VideoReviewEndToEndTests(unittest.TestCase):
                 patch("pipeline.video_review_import.probe_fps", side_effect=lambda path: 29.97 if Path(path) == sony else 59.94), \
                 patch("pipeline.video_review_import.cut_clip", side_effect=touch_media), \
                 patch("pipeline.video_review_import.make_side_by_side", side_effect=touch_media), \
-                patch("pipeline.video_review_import.run_pose_analysis", return_value=pose), \
+                patch("pipeline.video_review_import.run_pose_analysis", return_value=pose) as mock_pose, \
                 patch("pipeline.video_review_import.load_whisper_json", return_value=whisper_words):
                 review_path = import_session(
                     sony=sony,
@@ -82,9 +82,20 @@ class VideoReviewEndToEndTests(unittest.TestCase):
                     output_dir=root / "session",
                     anchors=anchors,
                     injury_cutoff_s=20.0,
-                    blue_seed=(100.0, 200.0, 80.0, 160.0),
+                    blue_seed=(100.0, 200.0, 180.0, 360.0),
                     transcript_path=transcript,
                 )
+
+            mock_pose.assert_called_once_with(
+                sony.resolve(),
+                10.0,
+                20.0,
+                [100.0, 200.0, 180.0, 360.0],
+                analysis_fps=None,
+                model_path="yolo11x-pose.pt",
+                device="mps",
+                event_threshold=0.5,
+            )
 
             review = json.loads(review_path.read_text(encoding="utf-8"))
             self.assertEqual(review["time_map"], {"intercept": -20.0, "slope": 1.0})

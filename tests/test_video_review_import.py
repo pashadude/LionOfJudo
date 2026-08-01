@@ -189,6 +189,7 @@ class VideoReviewImportTests(TestCase):
         self.assertEqual(result["selected_track_id"], 7)
         self.assertEqual(len(result["frame_metrics"]), 3)
         self.assertTrue(result["events"])
+        self.assertEqual(result["events"][0]["event_id"], "e-001")
         self.assertTrue(
             all(event["sony_end_s"] <= 0.3 for event in result["events"])
         )
@@ -198,6 +199,74 @@ class VideoReviewImportTests(TestCase):
         self.assertIn("brzina_ulaska_norm", result["events"][0])
         self.assertIn("intenzitet_pokreta_0_100", result["events"][0])
         self.assertEqual(model.track_calls, 3)
+
+    def test_run_pose_analysis_samples_source_stride_and_preserves_timestamps(self):
+        frames = [self._pose_frame(float(index)) for index in range(10)]
+        capture = _FakeCapture(frames, fps=10.0)
+        model = _FakePoseModel(
+            [
+                _FakeResult([((0, 0, 20, 80), 7, self._keypoints(float(index)))])
+                for index in (0, 3, 6)
+            ]
+        )
+
+        result = run_pose_analysis(
+            Path("sony.mp4"),
+            0.0,
+            0.9,
+            (0, 0, 20, 80),
+            model=model,
+            video_capture_factory=lambda _path: capture,
+            fps=10.0,
+            analysis_fps=3.0,
+        )
+
+        self.assertEqual(result["source_fps"], 10.0)
+        self.assertEqual(result["requested_analysis_fps"], 3.0)
+        self.assertEqual(result["effective_analysis_fps"], 10.0 / 3.0)
+        self.assertEqual(result["stride"], 3)
+        self.assertEqual(
+            [metric["timestamp_s"] for metric in result["frame_metrics"]],
+            [0.0, 0.3, 0.6],
+        )
+        self.assertEqual(model.track_calls, 3)
+
+    def test_run_pose_analysis_starts_at_anchor_frame_and_uses_local_model_path(self):
+        frames = [self._pose_frame(float(index)) for index in range(8)]
+        capture = _FakeCapture(frames, fps=10.0)
+        model = _FakePoseModel(
+            [_FakeResult([((0, 0, 20, 80), 7, self._keypoints(0.0))])]
+        )
+
+        result = run_pose_analysis(
+            Path("sony.mp4"),
+            0.52,
+            0.7,
+            (0, 0, 20, 80),
+            model=model,
+            video_capture_factory=lambda _path: capture,
+            fps=10.0,
+            analysis_fps=3.0,
+            model_path=Path("/tmp/local-yolo.pt"),
+        )
+
+        self.assertEqual(capture.positioned_at, 6)
+        self.assertEqual(result["analysis_start_s"], 0.52)
+        self.assertEqual(result["frame_metrics"][0]["timestamp_s"], 0.6)
+        self.assertEqual(model.track_calls, 1)
+
+    def test_run_pose_analysis_rejects_analysis_rate_above_source_fps(self):
+        with self.assertRaisesRegex(ValueError, "analysis_fps"):
+            run_pose_analysis(
+                Path("sony.mp4"),
+                0.0,
+                1.0,
+                (0, 0, 20, 80),
+                model=_FakePoseModel([]),
+                video_capture_factory=lambda _path: _FakeCapture([], fps=10.0),
+                fps=10.0,
+                analysis_fps=10.1,
+            )
 
     @patch("pipeline.video_review_import.run_pose_analysis")
     @patch("pipeline.video_review_import.make_side_by_side")
@@ -263,7 +332,66 @@ class VideoReviewImportTests(TestCase):
             review = json.loads(review_path.read_text(encoding="utf-8"))
             self.assertEqual(review["sony_fps"], 29.97)
             self.assertEqual(review["iphone_fps"], 59.94)
+            self.assertEqual(review["source_fps"], 29.97)
+            self.assertIsNone(review["requested_analysis_fps"])
+            self.assertEqual(review["effective_analysis_fps"], 29.97)
+            self.assertEqual(review["stride"], 1)
             self.assertGreaterEqual(self.mock_probe_fps.call_count, 2)
+
+    @patch("pipeline.video_review_import.run_pose_analysis")
+    @patch("pipeline.video_review_import.make_side_by_side")
+    @patch("pipeline.video_review_import.cut_clip")
+    def test_import_persists_sampling_profile_and_starts_at_first_anchor(
+        self, mock_cut, mock_composite, mock_pose
+    ):
+        with self._temporary_directory() as raw_root:
+            root = Path(raw_root)
+            sony, iphone = self._sources(root)
+            mock_cut.side_effect = self._touch_result
+            mock_composite.side_effect = self._touch_result
+            mock_pose.return_value = {
+                "source_fps": 29.97,
+                "requested_analysis_fps": 3.0,
+                "effective_analysis_fps": 29.97 / 10.0,
+                "stride": 10,
+                "analysis_start_s": 10.0,
+                "fps": 29.97 / 10.0,
+                "frame_metrics": [],
+                "events": [],
+            }
+            with patch(
+                "pipeline.video_review_import.probe_duration",
+                side_effect=self._duration_for_path,
+            ):
+                review_path = import_session(
+                    sony,
+                    iphone,
+                    root / "session",
+                    self._anchors(),
+                    20.0,
+                    (1, 2, 3, 4),
+                    analysis_fps=3.0,
+                    model_path=Path("/tmp/local-yolo.pt"),
+                    device="cpu",
+                )
+
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            self.assertEqual(review["source_fps"], 29.97)
+            self.assertEqual(review["requested_analysis_fps"], 3.0)
+            self.assertEqual(review["effective_analysis_fps"], 29.97 / 10.0)
+            self.assertEqual(review["stride"], 10)
+            self.assertEqual(review["analysis_start_s"], 10.0)
+            self.assertIn("grubo uzorkovanje", review["analysis_limitation"])
+            mock_pose.assert_called_once_with(
+                sony.resolve(),
+                10.0,
+                20.0,
+                [1.0, 2.0, 3.0, 4.0],
+                analysis_fps=3.0,
+                model_path=Path("/tmp/local-yolo.pt"),
+                device="cpu",
+                event_threshold=0.5,
+            )
 
     @patch("pipeline.video_review_import.run_pose_analysis", return_value=[])
     def test_import_fails_visibly_when_sony_fps_is_missing(
@@ -406,7 +534,14 @@ class VideoReviewImportTests(TestCase):
             self.assertTrue((root / "session" / "events" / "e-1" / "sony.mp4").exists())
             self.assertTrue((root / "session" / "events" / "e-1" / "iphone.mp4").exists())
             mock_pose.assert_called_once_with(
-                sony.resolve(), 0.0, 20.0, [1.0, 2.0, 3.0, 4.0]
+                sony.resolve(),
+                10.0,
+                20.0,
+                [1.0, 2.0, 3.0, 4.0],
+                analysis_fps=None,
+                model_path="yolo11x-pose.pt",
+                device="mps",
+                event_threshold=0.5,
             )
 
     @patch("pipeline.video_review_import.run_pose_analysis", return_value=[])
@@ -540,6 +675,7 @@ class _FakeCapture:
     def __init__(self, frames, fps):
         self.frames = iter(frames)
         self.fps = fps
+        self.positioned_at = None
 
     def get(self, _property):
         return self.fps
@@ -550,7 +686,8 @@ class _FakeCapture:
         except StopIteration:
             return False, None
 
-    def set(self, _property, _value):
+    def set(self, _property, value):
+        self.positioned_at = int(value)
         return True
 
     def release(self):

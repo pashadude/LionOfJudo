@@ -39,6 +39,10 @@ def _import_command(args: argparse.Namespace) -> int:
         blue_seed=args.blue_seed_sony,
         transcript_path=args.transcript_json,
         force_reimport=args.force_reimport,
+        analysis_fps=args.analysis_fps,
+        model_path=args.model_path,
+        device=args.device,
+        event_threshold=args.event_threshold,
     )
     print(f"Uvoz zavrsen: {review_path}")
     return 0
@@ -81,11 +85,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     import_parser.add_argument(
         "--injury-cutoff-sony-s", required=True, type=float,
+        dest="injury_cutoff_s",
         help="potvrdjeni kraj normalne obrade na Sony osi u sekundama",
     )
     import_parser.add_argument(
         "--blue-seed-sony", required=True, type=_blue_seed,
         help="pocetni okvir plavog sportiste: x1,y1,x2,y2",
+    )
+    import_parser.add_argument(
+        "--analysis-fps", type=float, default=None,
+        help="opcionalna stopa analize; npr. 3.0 za grubo uzorkovanje",
+    )
+    import_parser.add_argument(
+        "--model-path", type=Path, default=Path("yolo11x-pose.pt"),
+        help="postojeca lokalna YOLO pose tezina; uvoz ne preuzima model",
+    )
+    import_parser.add_argument(
+        "--device", default="mps",
+        help="uredjaj za lokalni YOLO (npr. mps, cpu ili cuda:0)",
+    )
+    import_parser.add_argument(
+        "--event-threshold", type=float, default=0.5,
+        help="prag normalizovanog video-pokreta (podrazumevano 0.5)",
     )
     import_parser.add_argument(
         "--transcript-json", type=Path, default=None,
