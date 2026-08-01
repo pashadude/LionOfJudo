@@ -12,6 +12,8 @@ async function mediaState(page) {
     paused: video.paused,
     playbackRate: video.playbackRate,
     readyState: video.readyState,
+    videoWidth: video.videoWidth,
+    videoHeight: video.videoHeight,
   })));
 }
 
@@ -34,7 +36,12 @@ async function main() {
     sample[1].currentTime - expectedIphoneLocal(sample[0].currentTime)
   );
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    ...(process.env.PLAYWRIGHT_EXECUTABLE
+      ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE }
+      : {}),
+  });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.goto(`${baseUrl}/?v=playback-sync-qa`, {
@@ -48,7 +55,9 @@ async function main() {
     );
     await page.locator("#event-list button[data-event-id='e-001']").click();
     await page.waitForFunction(
-      () => [...document.querySelectorAll("video")].every((video) => video.readyState >= 3),
+      () => [...document.querySelectorAll("video")].every((video) => (
+        video.readyState >= 3 && video.videoWidth > 0 && video.videoHeight > 0
+      )),
       null,
       { timeout: 20000 },
     );

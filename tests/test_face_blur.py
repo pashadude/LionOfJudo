@@ -369,7 +369,7 @@ class FaceBlurTests(unittest.TestCase):
         self.assertIn("detektor", report.failure_reason)
 
     @patch("pipeline.face_blur.subprocess.run")
-    def test_audio_mux_never_trims_verified_video_frames(self, mock_run):
+    def test_audio_mux_outputs_browser_compatible_h264_without_trimming(self, mock_run):
         _mux_original_audio(
             Path("private-video.mp4"),
             Path("source-audio.mp4"),
@@ -377,7 +377,9 @@ class FaceBlurTests(unittest.TestCase):
         )
 
         command = mock_run.call_args.args[0]
-        self.assertIn("copy", command)
+        self.assertIn("libx264", command)
+        self.assertIn("yuv420p", command)
+        self.assertNotIn("copy", command)
         self.assertNotIn("-shortest", command)
 
     def test_private_publish_replaces_output_only_after_final_clean_verification(self):

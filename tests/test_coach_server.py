@@ -505,6 +505,8 @@ class CoachServerTests(unittest.TestCase):
         self.assertNotIn("|| 30", app_js)
         self.assertIn("FPS Sony nije dostupan", app_js)
         self.assertIn("event.analysis_fingerprint || event.event_revision", app_js)
+        self.assertIn('const MEDIA_CODEC_VERSION = "h264-v1"', app_js)
+        self.assertIn("`${mediaVersionBase}:${MEDIA_CODEC_VERSION}`", app_js)
         self.assertIn("encodeURIComponent(String(mediaVersion))", app_js)
 
     def test_playback_sync_avoids_repeated_iphone_seeks(self):
@@ -514,7 +516,7 @@ class CoachServerTests(unittest.TestCase):
         )
         html = (static / "index.html").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/app.js?v=playback-sync-1"', html)
+        self.assertIn('src="/static/app.js?v=h264-media-1"', html)
         self.assertIn("function correctIphonePlayback", app_js)
         self.assertIn("Promise.all([sony.play(), iphone.play()])", app_js)
         self.assertIn("iphone.playbackRate = clamp", app_js)

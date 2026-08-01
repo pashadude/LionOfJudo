@@ -16,6 +16,7 @@
   const HARD_SYNC_THRESHOLD_S = 0.12;
   const MAX_PLAYBACK_RATE_CORRECTION = 0.04;
   const PLAYBACK_RATE_GAIN = 0.8;
+  const MEDIA_CODEC_VERSION = "h264-v1";
 
   function status(message, error = false) {
     const node = $("#app-status");
@@ -140,8 +141,9 @@
     const media = event.media || {};
     const path = media[camera]
       || `/media/events/${encodeURIComponent(event.event_id)}/${camera}.mp4`;
-    const mediaVersion = event.analysis_fingerprint || event.event_revision
+    const mediaVersionBase = event.analysis_fingerprint || event.event_revision
       || state.review?.session_id || "1";
+    const mediaVersion = `${mediaVersionBase}:${MEDIA_CODEC_VERSION}`;
     const separator = path.includes("?") ? "&" : "?";
     return `${path}${separator}v=${encodeURIComponent(String(mediaVersion))}`;
   }
