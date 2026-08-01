@@ -117,7 +117,12 @@
   function mediaFor(event, camera) {
     if (!event) return "";
     const media = event.media || {};
-    return media[camera] || `/media/events/${encodeURIComponent(event.event_id)}/${camera}.mp4`;
+    const path = media[camera]
+      || `/media/events/${encodeURIComponent(event.event_id)}/${camera}.mp4`;
+    const mediaVersion = event.analysis_fingerprint || event.event_revision
+      || state.review?.session_id || "1";
+    const separator = path.includes("?") ? "&" : "?";
+    return `${path}${separator}v=${encodeURIComponent(String(mediaVersion))}`;
   }
 
   function setChecked(name, value) {

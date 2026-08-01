@@ -121,11 +121,13 @@ class CoachEventEditorTests(unittest.TestCase):
     def fake_probe(path):
         return float(Path(path).read_text(encoding="ascii"))
 
-    def start_server(self, *, media_probe=None, privacy_processor=None):
+    def start_server(
+        self, *, clip_exporter=None, media_probe=None, privacy_processor=None
+    ):
         server = create_server(
             self.root,
             port=0,
-            clip_exporter=self.fake_cut,
+            clip_exporter=clip_exporter or self.fake_cut,
             media_probe=media_probe or self.fake_probe,
             privacy_processor=privacy_processor or self.fake_privacy,
         )
@@ -235,6 +237,29 @@ class CoachEventEditorTests(unittest.TestCase):
         self.assertEqual(event["ocena"], 4)
         self.assertEqual(event["napomena"], "Sačuvana napomena.")
         self.assertEqual(self.fake_probe(self.root / "events" / "e-1" / "sony.mp4"), 1.5)
+
+    def test_bounds_update_preserves_event_iphone_sync_offset_for_export(self):
+        review = json.loads(self.review_path.read_text(encoding="utf-8"))
+        review["events"][0]["iphone_sync_offset_s"] = 0.8
+        review["event_metrics"] = copy.deepcopy(review["events"])
+        self.review_path.write_text(json.dumps(review), encoding="utf-8")
+        exports = []
+
+        def recording_cut(source, start, end, output, **kwargs):
+            exports.append((Path(source).name, float(start), float(end)))
+            return self.fake_cut(source, start, end, output, **kwargs)
+
+        server = self.start_server(clip_exporter=recording_cut)
+        _, result = self.request_json(
+            server,
+            "/api/events/e-1/bounds",
+            method="PUT",
+            payload={"sony_start_s": 8.25, "sony_end_s": 9.75},
+        )
+
+        event = next(item for item in result["review"]["events"] if item["event_id"] == "e-1")
+        self.assertEqual(event["iphone_sync_offset_s"], 0.8)
+        self.assertIn((self.iphone.name, 14.05, 15.55), exports)
 
     def test_bounds_change_starts_new_assessment_round(self):
         legacy = self.upgrade_to_v3()

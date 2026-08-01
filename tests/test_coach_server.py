@@ -504,6 +504,8 @@ class CoachServerTests(unittest.TestCase):
         self.assertIn("function sonyFps", app_js)
         self.assertNotIn("|| 30", app_js)
         self.assertIn("FPS Sony nije dostupan", app_js)
+        self.assertIn("event.analysis_fingerprint || event.event_revision", app_js)
+        self.assertIn("encodeURIComponent(String(mediaVersion))", app_js)
 
     def test_injury_editor_state_disables_trainer_controls_and_reenables_normal_events(self):
         app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(

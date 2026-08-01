@@ -19,6 +19,7 @@ from pipeline.video_review_contract import validate_review_payload
 from pipeline.video_review_reports import event_is_injury, write_reports
 from pipeline.video_review_metrics import summarize_event_metrics
 from pipeline.video_review_storage import atomic_write_review, load_review_json
+from pipeline.video_review_sync import iphone_media_bounds, iphone_sync_offset
 
 
 ANNOTATION_FIELDS = ("potvrdena_tehnika", "ocena", "napomena")
@@ -127,6 +128,7 @@ class EventEditor:
                 selected["sony_end_s"] = split_s
                 if review.get("version", 1) >= 3:
                     right = self._blank_event(created_event_id, split_s, original_end)
+                    right["iphone_sync_offset_s"] = iphone_sync_offset(selected)
                 else:
                     right = copy.deepcopy(selected)
                     right["event_id"] = created_event_id
@@ -166,6 +168,15 @@ class EventEditor:
                 if positions[1] != positions[0] + 1:
                     raise ValueError("mogu se spojiti samo susedni normalni događaji")
                 survivor, removed = ordered
+                if not math.isclose(
+                    iphone_sync_offset(survivor),
+                    iphone_sync_offset(removed),
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                ):
+                    raise EventConflictError(
+                        "događaji imaju različite iPhone sync korekcije"
+                    )
                 first_annotation = _annotation(survivor)
                 second_annotation = _annotation(removed)
                 if first_annotation and second_annotation and first_annotation != second_annotation:
@@ -271,6 +282,7 @@ class EventEditor:
             "event_id": event_id,
             "sony_start_s": start,
             "sony_end_s": end,
+            "iphone_sync_offset_s": 0.0,
             "predlog_tehnike": None,
             "potvrdena_tehnika": None,
             "glasovna_fraza": None,
@@ -300,6 +312,9 @@ class EventEditor:
             raise ValueError("izvedene iPhone granice su van izvornog videa")
         event["iphone_start_s"] = iphone_start
         event["iphone_end_s"] = iphone_end
+        corrected_start, corrected_end = iphone_media_bounds(event)
+        if not 0.0 <= corrected_start < corrected_end <= iphone_duration:
+            raise ValueError("korigovane iPhone granice su van izvornog videa")
         frame_metrics = [
             item for item in review.get("frame_metrics", []) if isinstance(item, Mapping)
         ]
@@ -344,9 +359,10 @@ class EventEditor:
     ) -> list[dict[str, Any]]:
         if self.privacy_processor is None:
             raise MediaExportError("privacy processor nije dostupan")
+        iphone_start, iphone_end = iphone_media_bounds(event)
         windows = {
             "sony": (float(event["sony_start_s"]), float(event["sony_end_s"])),
-            "iphone": (float(event["iphone_start_s"]), float(event["iphone_end_s"])),
+            "iphone": (iphone_start, iphone_end),
         }
         manifest_rows = []
         for camera, (start, end) in windows.items():

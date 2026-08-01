@@ -33,6 +33,7 @@ from pipeline.video_review_storage import (
     atomic_write_review,
     load_review_json,
 )
+from pipeline.video_review_sync import iphone_media_bounds
 
 
 def migrate_review_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -83,6 +84,7 @@ def migrate_review_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         event.pop("confidence", None)
         event["iphone_start_s"] = (float(event["sony_start_s"]) - intercept) / slope
         event["iphone_end_s"] = (float(event["sony_end_s"]) - intercept) / slope
+        event.setdefault("iphone_sync_offset_s", 0.0)
         if event_is_injury(event):
             event["predlog_tehnike"] = None
             event["glasovna_fraza"] = None
@@ -174,6 +176,7 @@ def _prepare_ai_review_payload(
             "sony_end_s": 132.0,
             "iphone_start_s": 131.5,
             "iphone_end_s": 135.0,
+            "iphone_sync_offset_s": 0.8,
             "predlog_tehnike": None,
             "potvrdena_tehnika": "Tai-otoshi",
             "glasovna_fraza": None,
@@ -193,6 +196,7 @@ def _prepare_ai_review_payload(
             "sony_end_s": 135.0,
             "iphone_start_s": 135.8,
             "iphone_end_s": 138.0,
+            "iphone_sync_offset_s": 0.0,
             "predlog_tehnike": None,
             "potvrdena_tehnika": "Morote-seoi-nage",
             "glasovna_fraza": None,
@@ -212,6 +216,7 @@ def _prepare_ai_review_payload(
             "sony_end_s": 136.0,
             "iphone_start_s": 138.0,
             "iphone_end_s": 139.0,
+            "iphone_sync_offset_s": 0.0,
             "predlog_tehnike": None,
             "potvrdena_tehnika": None,
             "glasovna_fraza": None,
@@ -321,15 +326,22 @@ def _regenerate_private_media(
 
     for event in review["events"]:
         event_id = str(event["event_id"])
-        for camera, source, duration in (
-            ("sony", sony, sony_duration),
-            ("iphone", iphone, iphone_duration),
+        iphone_start, iphone_end = iphone_media_bounds(event)
+        for camera, source, duration, start, end in (
+            (
+                "sony",
+                sony,
+                sony_duration,
+                float(event["sony_start_s"]),
+                float(event["sony_end_s"]),
+            ),
+            ("iphone", iphone, iphone_duration, iphone_start, iphone_end),
         ):
             relative = f"events/{event_id}/{camera}.mp4"
             report = _export_private_clip(
                 source,
-                float(event[f"{camera}_start_s"]),
-                float(event[f"{camera}_end_s"]),
+                start,
+                end,
                 stage / relative,
                 duration,
                 privacy_processor,

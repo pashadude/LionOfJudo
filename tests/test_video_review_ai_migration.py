@@ -3,9 +3,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from pipeline.face_blur import BlurReport
 from pipeline.video_review_migration import (
     _prepare_ai_review_payload,
+    _regenerate_private_media,
     migrate_ai_session,
 )
 
@@ -176,6 +179,10 @@ class VideoReviewAiMigrationTests(unittest.TestCase):
             [(event["sony_start_s"], event["sony_end_s"]) for event in normal],
             [(128.5, 132.0), (132.8, 135.0)],
         )
+        self.assertEqual(
+            [event["iphone_sync_offset_s"] for event in prepared["events"]],
+            [0.8, 0.0, 0.0],
+        )
         for event in normal:
             self.assertEqual(event["status"], "trener")
             self.assertIsNone(event["ocena"])
@@ -185,6 +192,57 @@ class VideoReviewAiMigrationTests(unittest.TestCase):
         injury = prepared["events"][2]
         self.assertEqual((injury["sony_start_s"], injury["sony_end_s"]), (135.0, 136.0))
         self.assertNotIn("ai_procene", injury)
+
+    def test_private_media_regeneration_applies_only_event_iphone_offset(self):
+        prepared = _prepare_ai_review_payload(
+            self.valid_review(), "trainer-ai-session"
+        )
+        stage = self.root / "stage"
+        exported = []
+
+        def fake_export(source, start, end, destination, _duration, _privacy):
+            exported.append(
+                (
+                    Path(destination).relative_to(stage).as_posix(),
+                    float(start),
+                    float(end),
+                )
+            )
+            return BlurReport(
+                total_frames=1,
+                first_pass_candidates=1,
+                second_pass_candidates=0,
+                privacy_verified=True,
+            )
+
+        def fake_privacy(_source, destination):
+            Path(destination).parent.mkdir(parents=True, exist_ok=True)
+            Path(destination).write_bytes(b"private")
+            return BlurReport(
+                total_frames=1,
+                first_pass_candidates=1,
+                second_pass_candidates=0,
+                privacy_verified=True,
+            )
+
+        with (
+            patch("pipeline.video_review_migration._export_private_clip", fake_export),
+            patch("pipeline.video_review_migration.make_side_by_side"),
+            patch("pipeline.video_review_migration.verify_media_export"),
+        ):
+            _regenerate_private_media(prepared, stage, fake_privacy)
+
+        windows = {
+            path: (start, end)
+            for path, start, end in exported
+            if path.startswith("events/")
+        }
+        self.assertEqual(windows["events/e-001/iphone.mp4"], (132.3, 135.8))
+        self.assertEqual(
+            windows["events/e-coach-001/iphone.mp4"], (135.8, 138.0)
+        )
+        self.assertEqual(windows["events/povreda/iphone.mp4"], (138.0, 139.0))
+        self.assertEqual(windows["events/e-001/sony.mp4"], (128.5, 132.0))
 
     @staticmethod
     def fake_media_regenerator(review, stage, _privacy_processor):

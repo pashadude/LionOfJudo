@@ -479,6 +479,7 @@ def compute_analysis_fingerprint(
             "sony_end_s": event.get("sony_end_s"),
             "iphone_start_s": event.get("iphone_start_s"),
             "iphone_end_s": event.get("iphone_end_s"),
+            "iphone_sync_offset_s": event.get("iphone_sync_offset_s", 0.0),
         },
         "selected_track_id": track_id,
         "effective_analysis_fps": fps,

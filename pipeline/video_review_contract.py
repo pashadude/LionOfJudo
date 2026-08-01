@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from pipeline.trainer_ai_evaluator import compute_analysis_fingerprint
 from pipeline.trainer_ai_state import validate_trainer_ai_event
+from pipeline.video_review_sync import iphone_media_bounds, iphone_sync_offset
 
 
 ANCHOR_PREVIEW_PATTERN = re.compile(r"^previews/anchor_\d{2}_(?:sony|iphone)\.mp4$")
@@ -328,9 +329,12 @@ def validate_review_payload(payload: Mapping[str, Any]) -> None:
         iphone_end = raw_event.get("iphone_end_s")
         if (iphone_start is None) != (iphone_end is None):
             raise ValueError("event iPhone bounds must be present together")
+        if iphone_start is None and "iphone_sync_offset_s" in raw_event:
+            raise ValueError("event iPhone sync offset requires iPhone bounds")
         if iphone_start is not None:
             iphone_start_value = _finite_float(iphone_start, "iphone_start_s")
             iphone_end_value = _finite_float(iphone_end, "iphone_end_s")
+            iphone_sync_offset(raw_event)
             if not 0.0 <= iphone_start_value < iphone_end_value <= iphone_duration:
                 raise ValueError("event must be within the iPhone source")
             expected_start = (float(raw_event["sony_start_s"]) - intercept) / slope
@@ -339,6 +343,9 @@ def validate_review_payload(payload: Mapping[str, Any]) -> None:
                 raise ValueError("event iPhone start does not match the inverse time map")
             if not math.isclose(iphone_end_value, expected_end, rel_tol=0.0, abs_tol=1e-6):
                 raise ValueError("event iPhone end does not match the inverse time map")
+            corrected_start, corrected_end = iphone_media_bounds(raw_event)
+            if not 0.0 <= corrected_start < corrected_end <= iphone_duration:
+                raise ValueError("event corrected iPhone media must be within source")
         is_injury = bool(
             raw_event.get("prijavljen_povredni_dogadjaj")
             or raw_event.get("iskljuceno_iz_statistike")

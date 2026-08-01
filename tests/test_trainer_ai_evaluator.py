@@ -315,9 +315,11 @@ class TrainerAiEvaluatorTests(unittest.TestCase):
 
         baseline = compute_analysis_fingerprint(review, event)
         changed = dict(event, sony_end_s=12.1)
+        shifted = dict(event, iphone_sync_offset_s=0.8)
 
         self.assertRegex(baseline, r"^sha256:[0-9a-f]{64}$")
         self.assertNotEqual(baseline, compute_analysis_fingerprint(review, changed))
+        self.assertNotEqual(baseline, compute_analysis_fingerprint(review, shifted))
         self.assertEqual(baseline, compute_analysis_fingerprint(review, event))
 
         nested_track_review = dict(review)

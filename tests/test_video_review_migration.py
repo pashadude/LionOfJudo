@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import tempfile
@@ -186,6 +187,21 @@ class VideoReviewMigrationTests(unittest.TestCase):
         migrated["sources"]["sony"]["sha256"] = "c" * 64
 
         with self.assertRaisesRegex(ValueError, "fingerprint"):
+            validate_review_payload(migrated)
+
+    def test_validation_accepts_bounded_event_iphone_sync_offset(self):
+        with tempfile.TemporaryDirectory() as raw:
+            migrated = migrate_review_payload(self.fixture(Path(raw)))
+        migrated["version"] = 2
+        event = migrated["events"][0]
+        event["iphone_sync_offset_s"] = 0.8
+        migrated["event_metrics"] = copy.deepcopy(migrated["events"])
+
+        validate_review_payload(migrated)
+
+        event["iphone_sync_offset_s"] = 27.0
+        migrated["event_metrics"] = copy.deepcopy(migrated["events"])
+        with self.assertRaisesRegex(ValueError, "corrected iPhone"):
             validate_review_payload(migrated)
 
     def test_session_migration_writes_analysis_and_reports_without_touching_sources(self):
