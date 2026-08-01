@@ -10,6 +10,8 @@
     globalSonyTime: 0,
     syncing: false,
   };
+  const MIN_EVENT_SPAN = 0.001;
+  const DRAFT_EVENT_SPAN = 1;
 
   function status(message, error = false) {
     const node = $("#app-status");
@@ -147,6 +149,54 @@
       .sort((first, second) => Number(first.sony_start_s) - Number(second.sony_start_s));
   }
 
+  function firstConfirmedSonyAnchor() {
+    const anchor = (state.review?.anchors || []).find((item) => item?.user_confirmed === true);
+    const sonyTime = Number(anchor?.sony_s);
+    return Number.isFinite(sonyTime) ? sonyTime : null;
+  }
+
+  function normalEventDraftBounds() {
+    const firstAnchor = firstConfirmedSonyAnchor();
+    const cutoff = Number(state.review?.injury_cutoff_s);
+    if (
+      firstAnchor === null
+      || !Number.isFinite(cutoff)
+      || cutoff - firstAnchor <= MIN_EVENT_SPAN
+    ) return null;
+
+    const gaps = [];
+    let gapStart = firstAnchor;
+    for (const event of normalEvents()) {
+      const start = Number(event.sony_start_s);
+      const end = Number(event.sony_end_s);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+      const boundedStart = clamp(start, firstAnchor, cutoff);
+      const boundedEnd = clamp(end, firstAnchor, cutoff);
+      if (boundedStart - gapStart > MIN_EVENT_SPAN) {
+        gaps.push({ start: gapStart, end: boundedStart });
+      }
+      gapStart = Math.max(gapStart, boundedEnd);
+    }
+    if (cutoff - gapStart > MIN_EVENT_SPAN) gaps.push({ start: gapStart, end: cutoff });
+    if (!gaps.length) return null;
+
+    const rawCursor = Number(state.globalSonyTime);
+    const cursor = Number.isFinite(rawCursor) ? rawCursor : cutoff;
+    const preferredEnd = Math.min(cutoff, cursor);
+    const boundedCursor = Math.max(firstAnchor, preferredEnd);
+    const gap = gaps.reduce((closest, candidate) => {
+      const distance = boundedCursor < candidate.start
+        ? candidate.start - boundedCursor
+        : boundedCursor > candidate.end
+          ? boundedCursor - candidate.end
+          : 0;
+      return distance < closest.distance ? { candidate, distance } : closest;
+    }, { candidate: gaps[0], distance: Number.POSITIVE_INFINITY }).candidate;
+    const end = Math.min(gap.end, Math.max(gap.start + DRAFT_EVENT_SPAN, boundedCursor));
+    const start = Math.max(gap.start, end - DRAFT_EVENT_SPAN);
+    return end - start > MIN_EVENT_SPAN ? { start, end } : null;
+  }
+
   function nextNormalEvent(event) {
     const events = normalEvents();
     const index = events.findIndex((item) => item.event_id === event?.event_id);
@@ -156,10 +206,11 @@
   function updateCorrectionControls() {
     const event = state.selected;
     const readOnly = !event || injury(event);
-    $("#event-start").disabled = readOnly;
-    $("#event-end").disabled = readOnly;
+    const canCreateEvent = Boolean(normalEventDraftBounds());
+    $("#event-start").disabled = !canCreateEvent;
+    $("#event-end").disabled = !canCreateEvent;
     $("#update-bounds-button").disabled = readOnly;
-    $("#create-event-button").disabled = !state.review || readOnly;
+    $("#create-event-button").disabled = !canCreateEvent;
     $("#delete-button").disabled = readOnly;
     $("#merge-button").disabled = readOnly || !nextNormalEvent(event);
     const start = Number(event?.sony_start_s);
@@ -169,11 +220,26 @@
       || !Number.isFinite(cursor)
       || cursor <= start + 0.001
       || cursor >= end - 0.001;
+    if (!canCreateEvent && event && injury(event)) {
+      status("Nema dostupnog normalnog intervala između prvog ankera i preseka povrede.", true);
+    }
   }
 
   function populateEventBounds(event) {
     $("#event-start").value = Number(event.sony_start_s).toFixed(3);
     $("#event-end").value = Number(event.sony_end_s).toFixed(3);
+  }
+
+  function populateDraftEventBounds() {
+    const draft = normalEventDraftBounds();
+    if (!draft) {
+      $("#event-start").value = "";
+      $("#event-end").value = "";
+      return null;
+    }
+    $("#event-start").value = draft.start.toFixed(3);
+    $("#event-end").value = draft.end.toFixed(3);
+    return draft;
   }
 
   function updateSyncLock(review) {
@@ -201,7 +267,8 @@
     sony.load();
     iphone.load();
     updateEditor(event);
-    populateEventBounds(event);
+    if (injury(event)) populateDraftEventBounds();
+    else populateEventBounds(event);
     seekSony(state.globalSonyTime);
     updateReadout();
     updateCorrectionControls();

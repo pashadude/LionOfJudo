@@ -399,6 +399,28 @@ class CoachServerTests(unittest.TestCase):
         self.assertIn("setEditorDisabled(true);", app_js)
         self.assertIn("setEditorDisabled(disabled);", app_js)
 
+    def test_injury_selection_keeps_event_creation_and_draft_bounds_available(self):
+        app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("function normalEventDraftBounds", app_js)
+        self.assertIn("const canCreateEvent = Boolean(normalEventDraftBounds());", app_js)
+        self.assertIn('$("#event-start").disabled = !canCreateEvent;', app_js)
+        self.assertIn('$("#event-end").disabled = !canCreateEvent;', app_js)
+        self.assertIn('$("#create-event-button").disabled = !canCreateEvent;', app_js)
+        self.assertIn('if (injury(event)) populateDraftEventBounds();', app_js)
+
+    def test_event_creation_draft_is_clamped_to_confirmed_anchor_and_injury_cutoff(self):
+        app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("function firstConfirmedSonyAnchor", app_js)
+        self.assertIn("Math.min(cutoff, cursor)", app_js)
+        self.assertIn("Math.max(firstAnchor,", app_js)
+        self.assertIn("end - start > MIN_EVENT_SPAN", app_js)
+        self.assertIn("Nema dostupnog normalnog intervala", app_js)
+        self.assertIn("if (!canCreateEvent && event && injury(event))", app_js)
+
     def test_ui_uses_canonical_event_series_and_complete_correction_controls(self):
         static = Path(__file__).parents[1] / "coach_app" / "static"
         html = (static / "index.html").read_text(encoding="utf-8")
