@@ -2,6 +2,9 @@ from dataclasses import dataclass
 import math
 from typing import Any, Mapping
 
+from pipeline.trainer_ai_evaluator import compute_analysis_fingerprint
+from pipeline.trainer_ai_state import validate_trainer_ai_event
+
 
 def _finite_float(value: object, field_name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -181,6 +184,9 @@ def validate_review_payload(payload: Mapping[str, Any]) -> None:
     """Validate the final persisted review payload across derived collections."""
     if not isinstance(payload, Mapping):
         raise TypeError("review payload must be a JSON object")
+    version = payload.get("version", 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+        raise ValueError("review version must be a positive integer")
     raw_anchors = payload.get("anchors")
     raw_events = payload.get("events")
     if not isinstance(raw_anchors, list) or len(raw_anchors) != 2:
@@ -244,6 +250,7 @@ def validate_review_payload(payload: Mapping[str, Any]) -> None:
     metric_keys = (
         "brzina_ulaska_norm",
         "rotacija_trupa_2d_dps",
+        "proxy_ubrzanja_norm_s2",
         "promena_visine_kukova_norm",
         "sirina_stava_norm",
         "vreme_oporavka_s",
@@ -274,6 +281,17 @@ def validate_review_payload(payload: Mapping[str, Any]) -> None:
                 raise ValueError("event iPhone start does not match the inverse time map")
             if not math.isclose(iphone_end_value, expected_end, rel_tol=0.0, abs_tol=1e-6):
                 raise ValueError("event iPhone end does not match the inverse time map")
+        is_injury = bool(
+            raw_event.get("prijavljen_povredni_dogadjaj")
+            or raw_event.get("iskljuceno_iz_statistike")
+            or raw_event.get("status") == "povreda"
+        )
+        if version >= 3 and not is_injury:
+            expected_fingerprint = compute_analysis_fingerprint(payload, raw_event)
+            if raw_event.get("analysis_fingerprint") != expected_fingerprint:
+                raise ValueError("event analysis_fingerprint ne odgovara aktivnim podacima")
+        if version >= 3:
+            validate_trainer_ai_event(raw_event)
 
     frame_metrics = payload.get("frame_metrics", [])
     if not isinstance(frame_metrics, list):
@@ -308,6 +326,8 @@ def validate_review_payload(payload: Mapping[str, Any]) -> None:
             for key in ("sony_start_s", "sony_end_s", *metric_keys):
                 if event.get(key) != metrics.get(key):
                     raise ValueError("event_metrics must match active event bounds and metrics")
+        if version >= 3 and event_metrics != raw_events:
+            raise ValueError("v3 event_metrics must match the versioned active events")
 
     orphaned = payload.get("orphaned_annotations", [])
     if not isinstance(orphaned, list) or not all(isinstance(item, Mapping) for item in orphaned):

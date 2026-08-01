@@ -5,8 +5,9 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
-from pipeline.video_event_detection import motion_energy, recovery_to_stable_s
-from pipeline.video_pose_metrics import json_safe
+from pipeline.trainer_ai_evaluator import POSE_METRICS_ID
+from pipeline.video_event_detection import recovery_to_stable_s
+from pipeline.video_pose_metrics import canonical_intensity_series, json_safe
 
 
 FRAME_SERIES = (
@@ -23,6 +24,7 @@ RECOVERY_CONSECUTIVE_SAMPLES = 3
 def canonical_metric_schema(effective_analysis_fps: float | None) -> dict[str, Any]:
     return {
         "version": 1,
+        "pose_metrics_id": POSE_METRICS_ID,
         "frame_series": [
             {"key": key, "label": label} for key, label in FRAME_SERIES
         ],
@@ -45,10 +47,56 @@ def canonical_metric_schema(effective_analysis_fps: float | None) -> dict[str, A
 
 def canonicalize_frame_metrics(
     frame_metrics: Sequence[Mapping[str, Any]],
+    *,
+    trust_precomputed_acceleration: bool = False,
 ) -> list[dict[str, Any]]:
     """Map legacy FrameMetric keys and align derived 0..100 intensity by timestamp."""
     source = [dict(frame) for frame in frame_metrics]
-    energy = motion_energy(source)
+    speeds = [
+        frame.get("brzina_ulaska_norm", frame.get("brzina_ulaska_norm_s"))
+        for frame in source
+    ]
+    rotations = [
+        frame.get("rotacija_trupa_2d_dps", frame.get("rotation_2d_dps"))
+        for frame in source
+    ]
+    intensity = canonical_intensity_series(speeds, rotations)
+    accelerations: list[float | None] = []
+    previous_speed: tuple[float, float] | None = None
+    for frame, speed in zip(source, speeds):
+        timestamp = frame.get("timestamp_s")
+        has_precomputed = (
+            trust_precomputed_acceleration
+            and "proxy_ubrzanja_norm_s2" in frame
+        )
+        precomputed = frame.get("proxy_ubrzanja_norm_s2")
+        acceleration = (
+            float(precomputed)
+            if has_precomputed
+            and isinstance(precomputed, (int, float)) and not isinstance(precomputed, bool)
+            and math.isfinite(float(precomputed))
+            else None
+        )
+        if (
+            not has_precomputed
+            and isinstance(speed, (int, float)) and not isinstance(speed, bool)
+            and isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool)
+            and math.isfinite(float(speed)) and math.isfinite(float(timestamp))
+            and previous_speed is not None
+        ):
+            old_speed, old_time = previous_speed
+            dt = float(timestamp) - old_time
+            if dt > 0.0:
+                acceleration = abs(float(speed) - old_speed) / dt
+        accelerations.append(acceleration)
+        if (
+            isinstance(speed, (int, float)) and not isinstance(speed, bool)
+            and isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool)
+            and math.isfinite(float(speed)) and math.isfinite(float(timestamp))
+        ):
+            previous_speed = (float(speed), float(timestamp))
+        else:
+            previous_speed = None
     canonical = []
     legacy_keys = {
         "brzina_ulaska_norm_s",
@@ -58,26 +106,34 @@ def canonicalize_frame_metrics(
     }
     for index, frame in enumerate(source):
         item = {
-            key: json_safe(value)
+            key: json_safe(
+                round(float(value), 3 if key == "timestamp_s" else 6)
+                if isinstance(value, float) and math.isfinite(value)
+                else value
+            )
             for key, value in frame.items()
-            if key not in legacy_keys and key != "intenzitet_pokreta_0_100"
+            if key not in legacy_keys
+            and key not in {"intenzitet_pokreta_0_100", "proxy_ubrzanja_norm_s2"}
         }
         item["brzina_ulaska_norm"] = json_safe(
-            frame.get("brzina_ulaska_norm", frame.get("brzina_ulaska_norm_s"))
+            None if speeds[index] is None else round(float(speeds[index]), 6)
         )
         item["rotacija_trupa_2d_dps"] = json_safe(
-            frame.get("rotacija_trupa_2d_dps", frame.get("rotation_2d_dps"))
+            None if rotations[index] is None else round(float(rotations[index]), 6)
         )
+        hip_level = frame.get("promena_visine_kukova_norm", frame.get("hip_level_norm"))
+        stance = frame.get("sirina_stava_norm", frame.get("stance_width_norm"))
         item["promena_visine_kukova_norm"] = json_safe(
-            frame.get("promena_visine_kukova_norm", frame.get("hip_level_norm"))
+            None if hip_level is None else round(float(hip_level), 6)
         )
         item["sirina_stava_norm"] = json_safe(
-            frame.get("sirina_stava_norm", frame.get("stance_width_norm"))
+            None if stance is None else round(float(stance), 6)
         )
         item["intenzitet_pokreta_0_100"] = (
-            None
-            if energy[index] is None
-            else min(100.0, max(0.0, float(energy[index]) * 100.0))
+            None if intensity[index] is None else round(float(intensity[index]), 6)
+        )
+        item["proxy_ubrzanja_norm_s2"] = (
+            None if accelerations[index] is None else round(float(accelerations[index]), 6)
         )
         canonical.append(json_safe(item))
     return canonical

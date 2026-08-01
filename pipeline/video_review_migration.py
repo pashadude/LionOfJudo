@@ -6,6 +6,7 @@ import copy
 from pathlib import Path
 from typing import Any, Mapping
 
+from pipeline.trainer_ai_state import migrate_trainer_ai_payload
 from pipeline.video_review_contract import validate_review_payload
 from pipeline.video_review_metrics import (
     canonical_metric_schema,
@@ -22,10 +23,18 @@ from pipeline.video_review_storage import (
 
 def migrate_review_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     migrated = copy.deepcopy(dict(payload))
+    version = migrated.get("version", 1)
+    if isinstance(version, int) and not isinstance(version, bool) and version >= 3:
+        validate_review_payload(migrated)
+        return migrated
+
     raw_frames = migrated.get("frame_metrics", [])
     if not isinstance(raw_frames, list) or not all(isinstance(item, Mapping) for item in raw_frames):
         raise ValueError("frame_metrics mora biti lista JSON objekata")
-    frames = canonicalize_frame_metrics(raw_frames)
+    frames = canonicalize_frame_metrics(
+        raw_frames,
+        trust_precomputed_acceleration=False,
+    )
     migrated["frame_metrics"] = frames
     migrated["version"] = max(2, int(migrated.get("version", 1)))
     migrated["sync_locked"] = bool(
@@ -76,9 +85,13 @@ def migrate_review_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             ):
                 event.pop(key, None)
         else:
+            if isinstance(event.get("potvrdena_tehnika"), str) and event["potvrdena_tehnika"].strip():
+                event["status"] = "trener"
             event.update(summarize_event_metrics(event, frames))
     events.sort(key=lambda item: (float(item["sony_start_s"]), str(item["event_id"])))
     migrated["event_metrics"] = copy.deepcopy(events)
+    migrated = migrate_trainer_ai_payload(migrated)
+    migrated["event_metrics"] = copy.deepcopy(migrated["events"])
     validate_review_payload(migrated)
     return migrated
 

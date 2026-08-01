@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from pipeline.video_review_contract import validate_review_payload
 from pipeline.video_review_migration import migrate_review_payload, migrate_session
 
 
@@ -128,15 +129,64 @@ class VideoReviewMigrationTests(unittest.TestCase):
             values = [sample[key] for sample in migrated["frame_metrics"]]
             self.assertTrue(all(isinstance(value, (int, float)) for value in values))
         self.assertTrue(all(0.0 <= sample["intenzitet_pokreta_0_100"] <= 100.0 for sample in migrated["frame_metrics"]))
+        self.assertEqual(
+            migrated["frame_metrics"][0]["intenzitet_pokreta_0_100"],
+            11.967593,
+        )
+        self.assertEqual(
+            migrated["frame_metrics"][1]["proxy_ubrzanja_norm_s2"],
+            0.9,
+        )
         event = migrated["events"][0]
         self.assertEqual(event["potvrdena_tehnika"], "O-soto-gari")
-        self.assertEqual(event["ocena"], 4)
+        self.assertEqual(event["status"], "trener")
+        self.assertIsNone(event["ocena"])
+        self.assertEqual(event["legacy_annotations"][0]["ocena"], 4)
+        self.assertTrue(event["legacy_annotations"][0]["nije_pre_ai"])
+        self.assertEqual(event["trener_procene"], [])
+        self.assertIsNone(event["ai_procene"][0]["ai_otkriven_u"])
         self.assertEqual(event["napomena"], "Migracija čuva ovu napomenu.")
         self.assertEqual(migrated["event_metrics"], migrated["events"])
+        self.assertEqual(migrated["version"], 3)
+        self.assertEqual(migrated, migrate_review_payload(migrated))
         recovery = migrated["metric_schema"]["recovery_to_stable"]
         self.assertEqual(recovery["motion_energy_threshold"], 0.2)
         self.assertEqual(recovery["consecutive_samples"], 3)
         self.assertEqual(recovery["when_not_observable"], None)
+
+    def test_migration_ignores_untrusted_legacy_acceleration(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.fixture(Path(raw))
+            payload["metric_schema"] = {"pose_metrics_id": "video-pose-metrics-v1"}
+            payload["frame_metrics"][1]["proxy_ubrzanja_norm_s2"] = 99.0
+
+            migrated = migrate_review_payload(payload)
+
+        self.assertEqual(
+            migrated["frame_metrics"][1]["proxy_ubrzanja_norm_s2"],
+            0.9,
+        )
+
+    def test_fractional_migration_is_exactly_idempotent(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.fixture(Path(raw))
+            payload["frame_metrics"][0]["timestamp_s"] = 10.00049
+            payload["frame_metrics"][1]["timestamp_s"] = 11.00051
+            payload["frame_metrics"][0]["brzina_ulaska_norm_s"] = 0.123456789
+            payload["frame_metrics"][1]["brzina_ulaska_norm_s"] = 0.987654321
+
+            migrated = migrate_review_payload(payload)
+            repeated = migrate_review_payload(migrated)
+
+        self.assertEqual(migrated, repeated)
+
+    def test_validation_rejects_stale_analysis_fingerprint(self):
+        with tempfile.TemporaryDirectory() as raw:
+            migrated = migrate_review_payload(self.fixture(Path(raw)))
+        migrated["sources"]["sony"]["sha256"] = "c" * 64
+
+        with self.assertRaisesRegex(ValueError, "fingerprint"):
+            validate_review_payload(migrated)
 
     def test_session_migration_writes_analysis_and_reports_without_touching_sources(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -158,6 +208,7 @@ class VideoReviewMigrationTests(unittest.TestCase):
             }
             self.assertEqual(before_hashes, after_hashes)
             self.assertEqual(migrated["events"][0]["potvrdena_tehnika"], "O-soto-gari")
+            self.assertIsNone(migrated["events"][0]["ocena"])
             self.assertTrue(migrated["sync_locked"])
             self.assertTrue((session / "analysis" / "frame_metrics.json").is_file())
             self.assertTrue((session / "analysis" / "event_metrics.json").is_file())

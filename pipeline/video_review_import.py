@@ -731,7 +731,8 @@ def import_session(
     )
     if isinstance(pose_result, Mapping):
         frame_metrics = canonicalize_frame_metrics(
-            list(pose_result.get("frame_metrics", []))
+            list(pose_result.get("frame_metrics", [])),
+            trust_precomputed_acceleration=True,
         )
         pose_events = pose_result.get("events", [])
         pose_summary = {
