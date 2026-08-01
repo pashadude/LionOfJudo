@@ -41,6 +41,7 @@ def _safe_event_path(event_id: object, camera: str) -> tuple[str, PurePosixPath]
     if (
         path.is_absolute()
         or "\\" in relative
+        or "%" in relative
         or any(part in {"", ".", ".."} for part in path.parts)
         or len(path.parts) != 3
     ):
@@ -159,6 +160,29 @@ def _audit_row(
         "locked_at": assessment.get("zakljucano_u"),
         "training_eligible": training_eligible,
         "ineligibility_reasons": reasons,
+    }
+
+
+def _legacy_audit_row(
+    event: Mapping[str, Any], annotation: Mapping[str, Any]
+) -> dict[str, Any]:
+    return {
+        "event_id": event.get("event_id"),
+        "event_revision": None,
+        "analysis_fingerprint": None,
+        "assessment_revision": None,
+        "assessment_phase": "legacy_annotation",
+        "source_trainer_revision": None,
+        "trainer_name": None,
+        "wrestler_name": None,
+        "visibility_status": None,
+        "throw_name": annotation.get("potvrdena_tehnika"),
+        "score_1_5": annotation.get("ocena"),
+        "reasoning": annotation.get("napomena"),
+        "cited_sony_seconds": None,
+        "locked_at": None,
+        "training_eligible": False,
+        "ineligibility_reasons": ["identityless_legacy_annotation"],
     }
 
 
@@ -289,6 +313,9 @@ def build_trainer_exports(
                         media={camera: reference for camera, reference in media.items() if reference},
                     )
                 )
+        for annotation in event.get("legacy_annotations", []):
+            if isinstance(annotation, Mapping):
+                audit_rows.append(_legacy_audit_row(event, annotation))
     participants = review.get("participants")
     dataset: dict[str, Any] = {
         "schema_version": 1,

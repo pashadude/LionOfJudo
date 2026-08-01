@@ -207,6 +207,54 @@ class TrainerDatasetExportTests(unittest.TestCase):
             audit["assessments"][0]["ineligibility_reasons"],
         )
 
+    def test_audits_migrated_legacy_annotations_without_training_them(self):
+        review = self._review()
+        review["events"][0]["legacy_annotations"] = [
+            {
+                "potvrdena_tehnika": "Seoi-nage",
+                "ocena": 3,
+                "napomena": "Stara oznaka pre AI procene.",
+                "nije_pre_ai": True,
+            }
+        ]
+
+        dataset, audit = build_trainer_exports(
+            review,
+            generation_id=GENERATION_ID,
+            bundle_root=self.root,
+            generated_at=GENERATED_AT,
+        )
+
+        legacy = [
+            row
+            for row in audit["assessments"]
+            if row["assessment_phase"] == "legacy_annotation"
+        ]
+        self.assertEqual(len(dataset["training_examples"]), 1)
+        self.assertEqual(
+            legacy,
+            [
+                {
+                    "event_id": "e-001",
+                    "event_revision": None,
+                    "analysis_fingerprint": None,
+                    "assessment_revision": None,
+                    "assessment_phase": "legacy_annotation",
+                    "source_trainer_revision": None,
+                    "trainer_name": None,
+                    "wrestler_name": None,
+                    "visibility_status": None,
+                    "throw_name": "Seoi-nage",
+                    "score_1_5": 3,
+                    "reasoning": "Stara oznaka pre AI procene.",
+                    "cited_sony_seconds": None,
+                    "locked_at": None,
+                    "training_eligible": False,
+                    "ineligibility_reasons": ["identityless_legacy_annotation"],
+                }
+            ],
+        )
+
     def test_binds_clean_example_to_verified_media_bytes(self):
         dataset, _ = build_trainer_exports(
             self._review(),
@@ -260,6 +308,20 @@ class TrainerDatasetExportTests(unittest.TestCase):
                 bundle_root=self.root,
                 generated_at=GENERATED_AT,
             )
+
+    def test_rejects_percent_encoded_event_path_components(self):
+        for event_id in ("e%2fother", "e%2e%2e%2fescape"):
+            with self.subTest(event_id=event_id):
+                review = self._review()
+                review["events"][0]["event_id"] = event_id
+
+                with self.assertRaisesRegex(ValueError, "putanja"):
+                    build_trainer_exports(
+                        review,
+                        generation_id=GENERATION_ID,
+                        bundle_root=self.root,
+                        generated_at=GENERATED_AT,
+                    )
 
         unsafe = self._review()
         unsafe["events"][0]["event_id"] = "../escape"
