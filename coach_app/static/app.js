@@ -9,6 +9,7 @@
     selected: null,
     globalSonyTime: 0,
     syncing: false,
+    trainerCitations: [],
   };
   const MIN_EVENT_SPAN = 0.001;
   const DRAFT_EVENT_SPAN = 1;
@@ -119,24 +120,197 @@
     return media[camera] || `/media/events/${encodeURIComponent(event.event_id)}/${camera}.mp4`;
   }
 
+  function setChecked(name, value) {
+    document.querySelectorAll(`input[name='${name}']`).forEach((input) => {
+      input.checked = input.value === String(value ?? "");
+    });
+  }
+
+  function checkedValue(name) {
+    return document.querySelector(`input[name='${name}']:checked`)?.value || "";
+  }
+
+  function activeTrainerAssessment(event) {
+    const revision = event?.aktivna_trener_revizija;
+    return (event?.trener_procene || []).find((row) => row.revizija === revision) || null;
+  }
+
+  function hasPreAiAssessment(event) {
+    return (event?.trener_procene || []).some((row) => (
+      row.faza === "pre_ai"
+      && row.event_revision === event.event_revision
+      && row.analysis_fingerprint === event.analysis_fingerprint
+    ));
+  }
+
+  function revealedAiEvaluation(event) {
+    return (event?.ai_procene || []).find((row) => row.ai_otkriven_u) || null;
+  }
+
+  function activeAiFeedback(event) {
+    const duel = event?.aktivni_duel;
+    if (!duel) return null;
+    return (event?.procene_ai_predloga || []).find((row) => (
+      row.event_revision === duel.event_revision
+      && row.analysis_fingerprint === duel.analysis_fingerprint
+      && row.trener_revizija === duel.trener_revizija
+      && row.evaluator_id === duel.evaluator_id
+    )) || null;
+  }
+
+  function displayNumber(value, digits = 2) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(digits) : "—";
+  }
+
+  function optionalScore(value) {
+    if (value == null || value === "") return null;
+    const score = Number(value);
+    return Number.isFinite(score) ? score : null;
+  }
+
+  function updateCitationList() {
+    const node = $("#citation-list");
+    node.textContent = state.trainerCitations.length
+      ? state.trainerCitations.map((second) => `${Number(second).toFixed(3)} s`).join(" · ")
+      : "Nema citiranih trenutaka";
+  }
+
   function setEditorDisabled(disabled) {
     $("#confirmed-technique").disabled = disabled;
-    $("#score").disabled = disabled;
-    $("#note").disabled = disabled;
-    $("#save-button").disabled = disabled;
+    $("#trainer-reason").disabled = disabled;
+    $("#add-current-second").disabled = disabled;
+    $("#lock-assessment-button").disabled = disabled;
+    document.querySelectorAll("input[name='visibility'], input[name='trainer-score']")
+      .forEach((input) => { input.disabled = disabled; });
+  }
+
+  function renderEvidence(ai, feedback) {
+    const list = $("#evidence-list");
+    const controls = $("#evidence-feedback");
+    list.replaceChildren();
+    controls.replaceChildren();
+    const savedRatings = new Map(
+      (feedback?.procene_dokaza || []).map((row) => [row.metrika, row.odnos]),
+    );
+    (ai?.dokazi || []).forEach((row) => {
+      const item = document.createElement("li");
+      const metric = document.createElement("strong");
+      const value = document.createElement("span");
+      const time = document.createElement("span");
+      metric.textContent = row.metrika;
+      value.textContent = `${displayNumber(row.vrednost, 3)} ${row.jedinica}`;
+      time.textContent = `${displayNumber(row.sony_s, 3)} s`;
+      item.append(metric, value, time);
+      list.append(item);
+
+      const label = document.createElement("label");
+      label.textContent = row.metrika;
+      const select = document.createElement("select");
+      select.dataset.evidenceMetric = row.metrika;
+      [
+        ["", "Bez ocene"],
+        ["prihvatam", "Prihvatam"],
+        ["nepotpun", "Nepotpun dokaz"],
+        ["osporavam", "Osporavam"],
+      ].forEach(([valueKey, text]) => {
+        const option = document.createElement("option");
+        option.value = valueKey;
+        option.textContent = text;
+        select.append(option);
+      });
+      select.value = savedRatings.get(row.metrika) || "";
+      label.append(select);
+      controls.append(label);
+    });
+  }
+
+  function renderImu(imu) {
+    const suffixes = {
+      ugaona_brzina_trupa_dps: " °/s",
+      proxy_ubrzanja_0_100: " / 100",
+      proxy_impulsa_0_100: " / 100",
+      intenzitet_0_100: " / 100",
+      vrh_sony_s: " s",
+    };
+    document.querySelectorAll("#imu-panel .imu-value").forEach((node) => {
+      const key = node.dataset.imu;
+      const value = imu?.[key];
+      node.textContent = typeof value === "number"
+        ? `${displayNumber(value, key === "vrh_sony_s" ? 3 : 1)}${suffixes[key] || ""}`
+        : (value || "—");
+    });
+  }
+
+  function renderAiPanels(event, trainer) {
+    const ai = revealedAiEvaluation(event);
+    const revealed = Boolean(ai);
+    $("#ai-duel").hidden = !revealed;
+    $("#system-facts").hidden = !revealed;
+    $("#imu-panel").hidden = !revealed;
+    $("#ai-feedback").hidden = !revealed;
+    if (!revealed) return;
+
+    const trainerScore = optionalScore(trainer?.ocena);
+    const aiScore = optionalScore(ai.predlozena_ocena);
+    $("#trainer-duel-score").textContent = Number.isFinite(trainerScore) ? `${trainerScore} / 5` : "Bez ocene";
+    $("#trainer-duel-technique").textContent = trainer?.potvrdena_tehnika || "Nedovoljno vidljivo";
+    $("#trainer-duel-reason").textContent = trainer?.razlog || "Trener nije dao procenu.";
+    $("#ai-duel-score").textContent = Number.isFinite(aiScore) ? `${aiScore} / 5` : "Bez ocene";
+    $("#ai-duel-confidence").textContent = `Pouzdanost ${displayNumber(Number(ai.pouzdanost_0_1) * 100, 1)}%`;
+    $("#ai-duel-reason").textContent = ai.razlog || "Sistem nema dovoljno podataka.";
+    if (!Number.isFinite(aiScore)) {
+      $("#duel-delta").textContent = "AI nema dovoljno podataka.";
+    } else if (Number.isFinite(trainerScore)) {
+      const delta = Math.abs(aiScore - trainerScore);
+      $("#duel-delta").textContent = `AI odstupa za ${delta} poena. Odbrani procenu.`;
+    } else {
+      $("#duel-delta").textContent = "AI je dao ocenu. Trener nije ocenio vidljivi kvalitet.";
+    }
+
+    const feedback = activeAiFeedback(event);
+    renderEvidence(ai, feedback);
+    renderImu(event.imu_eksperimentalno);
+    setChecked("ai-relation", feedback?.odnos);
+    $("#feedback-reason").value = feedback?.razlog || "";
+    const feedbackLocked = Boolean(feedback);
+    document.querySelectorAll("input[name='ai-relation'], #ai-feedback textarea, #ai-feedback select")
+      .forEach((control) => { control.disabled = feedbackLocked; });
+    $("#save-feedback-button").disabled = feedbackLocked;
+    $("#save-feedback-button").textContent = feedbackLocked
+      ? "Odgovor je sačuvan"
+      : "Sačuvaj odgovor";
   }
 
   function updateEditor(event) {
     const disabled = injury(event);
-    $("#suggested-technique").value = event.predlog_tehnike || "";
-    $("#confirmed-technique").value = event.potvrdena_tehnika || "";
-    $("#score").value = event.ocena == null ? "" : String(event.ocena);
-    $("#note").value = event.napomena || "";
+    const trainer = activeTrainerAssessment(event);
+    const preAiLocked = hasPreAiAssessment(event);
+    const revealed = Boolean(revealedAiEvaluation(event));
+    $("#confirmed-technique").value = trainer?.potvrdena_tehnika || event.potvrdena_tehnika || "";
+    $("#trainer-reason").value = trainer?.razlog || "";
+    setChecked("visibility", trainer?.status_vidljivosti);
+    setChecked("trainer-score", trainer?.ocena);
+    state.trainerCitations = Array.isArray(trainer?.citirani_sony_trenuci_s)
+      ? trainer.citirani_sony_trenuci_s.slice()
+      : [];
+    updateCitationList();
     setEditorDisabled(disabled);
+    if (preAiLocked && !revealed) setEditorDisabled(true);
+    $("#lock-assessment-button").textContent = revealed
+      ? "Sačuvaj korekciju"
+      : "Zaključaj procenu";
+    $("#reveal-ai-button").hidden = disabled || !preAiLocked || revealed;
+    $("#reveal-ai-button").disabled = disabled || !preAiLocked || revealed;
+    renderAiPanels(event, trainer);
     const visibility = $("#visibility-state");
     visibility.textContent = disabled
       ? "Prijavljen povredni događaj · samo za čitanje"
-      : (event.vidljivost === "nedovoljno_vidljivo" ? "Nedovoljno vidljivo" : "");
+      : revealed
+        ? "AI otkriven · korekcije trenera ostaju verzionisane"
+        : preAiLocked
+          ? "Procena zaključana · AI još nije prikazan"
+          : "AI je skriven dok trener ne zaključa procenu";
     visibility.classList.toggle("warning", disabled || Boolean(visibility.textContent));
   }
 
@@ -449,32 +623,134 @@
     status(message);
   }
 
-  async function saveAnnotation(event) {
-    if (injury(event)) {
-      status("Prijavljen povredni događaj je samo za čitanje", true);
-      return;
+  function replaceSelectedEvent(event) {
+    const index = (state.review?.events || []).findIndex((row) => row.event_id === event.event_id);
+    if (index >= 0) state.review.events[index] = event;
+    state.selected = event;
+    updateEditor(event);
+    const button = document.querySelector(`#event-list button[data-event-id='${CSS.escape(event.event_id)}']`);
+    if (button) {
+      button.querySelector(".event-name").textContent = event.potvrdena_tehnika
+        || event.predlog_tehnike
+        || event.event_id;
     }
-    const payload = {
-      potvrdena_tehnika: $("#confirmed-technique").value,
-      ocena: Number($("#score").value),
-      napomena: $("#note").value,
-    };
-    const response = await fetch(`/api/events/${encodeURIComponent(event.event_id)}/annotation`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const result = await readResult(response, "Čuvanje nije uspelo");
-    Object.assign(event, result);
-    status("Sačuvano");
-    renderEvents(event.event_id);
   }
 
-  $("#annotation-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
+  function trainerAssessmentPayload() {
+    const visibility = checkedValue("visibility");
+    if (!visibility) throw new Error("Izaberite vidljivost izvođenja");
+    if (visibility === "nedovoljno_vidljivo") {
+      return {
+        status_vidljivosti: visibility,
+        potvrdena_tehnika: null,
+        ocena: null,
+        razlog: null,
+        citirani_sony_trenuci_s: null,
+      };
+    }
+    const score = checkedValue("trainer-score");
+    const technique = $("#confirmed-technique").value.trim();
+    const reason = $("#trainer-reason").value.trim();
+    if (!technique || !score || !reason || !state.trainerCitations.length) {
+      throw new Error("Za vidljivo izvođenje unesite tehniku, ocenu, razlog i Sony sekundu");
+    }
+    return {
+      status_vidljivosti: visibility,
+      potvrdena_tehnika: technique,
+      ocena: Number(score),
+      razlog: reason,
+      citirani_sony_trenuci_s: state.trainerCitations.slice(),
+    };
+  }
+
+  $("#add-current-second").addEventListener("click", () => {
     if (!state.selected || injury(state.selected)) return;
+    const second = Number(Number(state.globalSonyTime).toFixed(3));
+    if (!state.trainerCitations.some((value) => Number(value).toFixed(3) === second.toFixed(3))) {
+      state.trainerCitations.push(second);
+    }
+    const marker = `[${second.toFixed(3)} s]`;
+    const reason = $("#trainer-reason");
+    if (!reason.value.includes(marker)) {
+      reason.value = `${reason.value.trimEnd()}${reason.value.trim() ? " " : ""}${marker}`;
+    }
+    updateCitationList();
+  });
+
+  $("#trainer-assessment-form").addEventListener("submit", async (formEvent) => {
+    formEvent.preventDefault();
+    const selected = state.selected;
+    if (!selected || injury(selected)) return;
     try {
-      await saveAnnotation(state.selected);
+      const response = await fetch(
+        `/api/events/${encodeURIComponent(selected.event_id)}/trainer-assessments`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(trainerAssessmentPayload()),
+        },
+      );
+      const result = await readResult(response, "Procena trenera nije sačuvana");
+      replaceSelectedEvent(result.event);
+      status(revealedAiEvaluation(result.event)
+        ? "Korekcija trenera je sačuvana"
+        : "Procena je zaključana. AI još nije prikazan.");
+    } catch (error) {
+      status(error.message, true);
+    }
+  });
+
+  $("#reveal-ai-button").addEventListener("click", async () => {
+    const selected = state.selected;
+    if (!selected || injury(selected)) return;
+    try {
+      const response = await fetch(
+        `/api/events/${encodeURIComponent(selected.event_id)}/ai-reveal`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
+      const result = await readResult(response, "AI procena nije dostupna");
+      replaceSelectedEvent(result.event);
+      status("AI procena je otkrivena. Uporedite dokaze i odbranite trenersku procenu.");
+    } catch (error) {
+      status(error.message, true);
+    }
+  });
+
+  $("#ai-feedback").addEventListener("submit", async (formEvent) => {
+    formEvent.preventDefault();
+    const selected = state.selected;
+    if (!selected || injury(selected)) return;
+    const relation = checkedValue("ai-relation");
+    if (!relation) {
+      status("Izaberite odnos prema AI proceni", true);
+      return;
+    }
+    const evidenceRatings = [...document.querySelectorAll("select[data-evidence-metric]")]
+      .filter((select) => select.value)
+      .map((select) => ({
+        metrika: select.dataset.evidenceMetric,
+        odnos: select.value,
+      }));
+    try {
+      const response = await fetch(
+        `/api/events/${encodeURIComponent(selected.event_id)}/ai-feedback`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            odnos: relation,
+            razlog: $("#feedback-reason").value.trim() || null,
+            procene_dokaza: evidenceRatings,
+          }),
+        },
+      );
+      const result = await readResult(response, "Odgovor trenera nije sačuvan");
+      replaceSelectedEvent(result.event);
+      status("Odgovor na AI procenu je sačuvan");
     } catch (error) {
       status(error.message, true);
     }

@@ -458,11 +458,18 @@ class CoachServerTests(unittest.TestCase):
         self.assertIn("Događaji", html)
         self.assertIn("Sinhronizacija", html)
         for label in (
-            "Predlog tehnike",
             "Potvrđena tehnika",
-            "Ocena",
-            "Napomena",
-            "Sačuvaj",
+            "Trenerova ocena 1–5",
+            "Razlog trenera",
+            "Dodaj trenutnu sekundu",
+            "Zaključaj procenu",
+            "Otkrij AI izazov",
+            "AI činjenice",
+            "IMU merenje (eksperimentalno)",
+            "Prototip v1. Moguća velika greška.",
+            "Slažem se",
+            "Delimično",
+            "Ne slažem se",
             "Podeli",
             "Spoji",
             "Obriši",
@@ -472,7 +479,7 @@ class CoachServerTests(unittest.TestCase):
         ):
             self.assertIn(label, html)
         self.assertEqual(html.count("<canvas"), 5)
-        self.assertIn('id="save-button" class="button primary" type="submit" disabled', html)
+        self.assertIn('id="lock-assessment-button" class="button primary" type="submit" disabled', html)
         for asset in ("/static/app.js", "/static/styles.css"):
             with urlopen(server.base_url + asset) as response:
                 self.assertEqual(response.status, 200)
@@ -498,14 +505,53 @@ class CoachServerTests(unittest.TestCase):
         self.assertNotIn("|| 30", app_js)
         self.assertIn("FPS Sony nije dostupan", app_js)
 
-    def test_injury_editor_state_disables_note_and_reenables_for_normal_events(self):
+    def test_injury_editor_state_disables_trainer_controls_and_reenables_normal_events(self):
         app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
             encoding="utf-8"
         )
         self.assertIn("function setEditorDisabled", app_js)
-        self.assertIn('$("#note").disabled = disabled;', app_js)
+        self.assertIn('$("#trainer-reason").disabled = disabled;', app_js)
+        self.assertIn('$("#lock-assessment-button").disabled = disabled;', app_js)
         self.assertIn("setEditorDisabled(true);", app_js)
         self.assertIn("setEditorDisabled(disabled);", app_js)
+
+    def test_static_ui_exposes_trainer_first_ai_duel_contract(self):
+        static = Path(__file__).parents[1] / "coach_app" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        app_js = (static / "app.js").read_text(encoding="utf-8")
+
+        for control_id in (
+            "confirmed-technique",
+            "trainer-reason",
+            "add-current-second",
+            "lock-assessment-button",
+            "reveal-ai-button",
+            "ai-duel",
+            "duel-delta",
+            "system-facts",
+            "imu-panel",
+            "feedback-reason",
+            "save-feedback-button",
+        ):
+            self.assertIn(f'id="{control_id}"', html)
+        self.assertEqual(html.count('name="trainer-score"'), 5)
+        self.assertEqual(html.count('name="ai-relation"'), 3)
+        self.assertEqual(html.count('class="imu-value"'), 8)
+        self.assertIn("AI odstupa za ${delta} poena. Odbrani procenu.", app_js)
+        self.assertIn("/trainer-assessments`", app_js)
+        self.assertIn("/ai-reveal`", app_js)
+        self.assertIn("/ai-feedback`", app_js)
+
+    def test_duel_score_conversion_preserves_null_as_unscored(self):
+        app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("function optionalScore", app_js)
+        self.assertIn("if (value == null || value === \"\") return null;", app_js)
+        self.assertIn("const trainerScore = optionalScore(trainer?.ocena);", app_js)
+        self.assertIn("const aiScore = optionalScore(ai.predlozena_ocena);", app_js)
+        self.assertIn('$("#duel-delta").textContent = "AI nema dovoljno podataka.";', app_js)
 
     def test_injury_selection_keeps_event_creation_and_draft_bounds_available(self):
         app_js = (Path(__file__).parents[1] / "coach_app" / "static" / "app.js").read_text(

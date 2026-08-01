@@ -79,18 +79,113 @@
 
       <section class="annotation-section panel" aria-labelledby="annotation-heading">
         <div class="panel-heading">
-          <h2 id="annotation-heading">Trenerska ocena</h2>
+          <h2 id="annotation-heading">Trener protiv AI</h2>
           <span id="visibility-state" class="visibility-state"></span>
         </div>
-        <form id="annotation-form">
+        <form id="trainer-assessment-form" class="assessment-form">
+          <fieldset class="choice-field">
+            <legend>Vidljivost izvođenja</legend>
+            <div class="segmented-control visibility-control">
+              <label><input type="radio" name="visibility" value="dovoljno_vidljivo"><span>Dovoljno vidljivo</span></label>
+              <label><input type="radio" name="visibility" value="nedovoljno_vidljivo"><span>Nedovoljno vidljivo</span></label>
+            </div>
+          </fieldset>
           <div class="form-grid">
-            <label>Predlog tehnike<input id="suggested-technique" type="text" readonly></label>
-            <label>Potvrđena tehnika<input id="confirmed-technique" name="potvrdena_tehnika" type="text" maxlength="120"></label>
-            <label>Ocena<select id="score" name="ocena"><option value="">Izaberi</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label>
-            <label class="wide">Napomena<textarea id="note" name="napomena" maxlength="2000" rows="4"></textarea></label>
+            <label>Potvrđena tehnika<input id="confirmed-technique" type="text" maxlength="120" autocomplete="off"></label>
+            <fieldset class="choice-field score-field">
+              <legend>Trenerova ocena 1–5</legend>
+              <div class="score-control" aria-label="Trenerova ocena">
+                <label><input type="radio" name="trainer-score" value="1"><span>1</span></label>
+                <label><input type="radio" name="trainer-score" value="2"><span>2</span></label>
+                <label><input type="radio" name="trainer-score" value="3"><span>3</span></label>
+                <label><input type="radio" name="trainer-score" value="4"><span>4</span></label>
+                <label><input type="radio" name="trainer-score" value="5"><span>5</span></label>
+              </div>
+            </fieldset>
+            <label class="wide">Razlog trenera<textarea id="trainer-reason" maxlength="2000" rows="4" placeholder="Opišite ulazak, rotaciju, ravnotežu i završetak."></textarea></label>
+          </div>
+          <div class="citation-bar">
+            <button id="add-current-second" class="button secondary" type="button">Dodaj trenutnu sekundu</button>
+            <span id="citation-list" class="citation-list">Nema citiranih trenutaka</span>
           </div>
           <div class="form-actions">
-            <button id="save-button" class="button primary" type="submit" disabled>Sačuvaj</button>
+            <button id="lock-assessment-button" class="button primary" type="submit" disabled>Zaključaj procenu</button>
+            <button id="reveal-ai-button" class="button challenge" type="button" hidden disabled>Otkrij AI izazov</button>
+          </div>
+        </form>
+
+        <section id="ai-duel" class="duel-section" aria-labelledby="duel-heading" hidden>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Zaključane procene</p>
+              <h3 id="duel-heading">Poređenje trenera i sistema</h3>
+            </div>
+            <strong id="duel-delta" class="duel-delta"></strong>
+          </div>
+          <div class="duel-grid">
+            <article>
+              <p class="duel-owner">Trener</p>
+              <strong id="trainer-duel-score" class="duel-score">—</strong>
+              <p id="trainer-duel-technique" class="duel-technique"></p>
+              <p id="trainer-duel-reason" class="duel-reason"></p>
+            </article>
+            <article>
+              <p class="duel-owner">AI sistem</p>
+              <strong id="ai-duel-score" class="duel-score">—</strong>
+              <p id="ai-duel-confidence" class="duel-technique"></p>
+              <p id="ai-duel-reason" class="duel-reason"></p>
+            </article>
+          </div>
+        </section>
+
+        <section id="system-facts" class="evidence-section" aria-labelledby="facts-heading" hidden>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Vrednost · jedinica · Sony vreme</p>
+              <h3 id="facts-heading">AI činjenice</h3>
+            </div>
+          </div>
+          <ol id="evidence-list" class="evidence-list"></ol>
+        </section>
+
+        <section id="imu-panel" class="imu-section" aria-labelledby="imu-heading" hidden>
+          <div class="section-heading">
+            <div>
+              <h3 id="imu-heading">IMU merenje (eksperimentalno)</h3>
+              <p class="section-note">Prototip v1. Moguća velika greška.</p>
+            </div>
+          </div>
+          <dl class="imu-grid">
+            <div><dt>Ugaona brzina trupa</dt><dd class="imu-value" data-imu="ugaona_brzina_trupa_dps">—</dd></div>
+            <div><dt>Proxy ubrzanja</dt><dd class="imu-value" data-imu="proxy_ubrzanja_0_100">—</dd></div>
+            <div><dt>Proxy impulsa</dt><dd class="imu-value" data-imu="proxy_impulsa_0_100">—</dd></div>
+            <div><dt>Intenzitet</dt><dd class="imu-value" data-imu="intenzitet_0_100">—</dd></div>
+            <div><dt>Dominantna rotacija</dt><dd class="imu-value" data-imu="dominantna_rotacija">—</dd></div>
+            <div><dt>Vrh (Sony)</dt><dd class="imu-value" data-imu="vrh_sony_s">—</dd></div>
+            <div><dt>Pouzdanost</dt><dd class="imu-value" data-imu="pouzdanost">—</dd></div>
+            <div><dt>Snaga 3D</dt><dd class="imu-value" data-imu="snaga_3d_status">—</dd></div>
+          </dl>
+        </section>
+
+        <form id="ai-feedback" class="feedback-section" hidden>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Odgovor na sistemsku procenu</p>
+              <h3>Trenerova odluka</h3>
+            </div>
+          </div>
+          <fieldset class="choice-field">
+            <legend>Odnos prema AI proceni</legend>
+            <div class="segmented-control relation-control">
+              <label><input type="radio" name="ai-relation" value="slazem_se"><span>Slažem se</span></label>
+              <label><input type="radio" name="ai-relation" value="delimicno"><span>Delimično</span></label>
+              <label><input type="radio" name="ai-relation" value="ne_slazem_se"><span>Ne slažem se</span></label>
+            </div>
+          </fieldset>
+          <label>Razlog (opciono)<textarea id="feedback-reason" maxlength="2000" rows="3"></textarea></label>
+          <div id="evidence-feedback" class="evidence-feedback"></div>
+          <div class="form-actions">
+            <button id="save-feedback-button" class="button primary" type="submit">Sačuvaj odgovor</button>
           </div>
         </form>
       </section>
