@@ -211,11 +211,29 @@
       : "Nema citiranih trenutaka";
   }
 
+  function hasSavedParticipants(review = state.review) {
+    const participants = review?.participants;
+    return Boolean(
+      participants
+      && String(participants.trainer_name || "").trim()
+      && String(participants.wrestler_name || "").trim(),
+    );
+  }
+
+  function populateParticipants(review) {
+    const participants = review?.participants || {};
+    const hasWrestlerName = Object.prototype.hasOwnProperty.call(participants, "wrestler_name");
+    $("#trainer-name").value = participants.trainer_name || "";
+    $("#wrestler-name").value = hasWrestlerName
+      ? String(participants.wrestler_name || "")
+      : "Dusan";
+  }
+
   function setEditorDisabled(disabled) {
     $("#confirmed-technique").disabled = disabled;
     $("#trainer-reason").disabled = disabled;
     $("#add-current-second").disabled = disabled;
-    $("#lock-assessment-button").disabled = disabled;
+    $("#lock-assessment-button").disabled = disabled || !hasSavedParticipants();
     document.querySelectorAll("input[name='visibility'], input[name='trainer-score']")
       .forEach((input) => { input.disabled = disabled; });
   }
@@ -712,6 +730,36 @@
     updateCitationList();
   });
 
+  $("#session-participants-form").addEventListener("submit", async (formEvent) => {
+    formEvent.preventDefault();
+    const trainerName = $("#trainer-name").value.trim();
+    const wrestlerName = $("#wrestler-name").value.trim();
+    if (!trainerName || !wrestlerName) {
+      status("Unesite ime trenera i ime rvača", true);
+      return;
+    }
+    try {
+      const response = await fetch("/api/session/participants", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trainer_name: trainerName,
+          wrestler_name: wrestlerName,
+        }),
+      });
+      const result = await readResult(response, "Podaci sesije nisu sačuvani");
+      state.review.participants = result.participants;
+      if (state.selected) {
+        const lockedBeforeReveal = hasPreAiAssessment(state.selected)
+          && !revealedAiEvaluation(state.selected);
+        $("#lock-assessment-button").disabled = injury(state.selected) || lockedBeforeReveal;
+      }
+      status("Podaci sesije su sačuvani");
+    } catch (error) {
+      status(error.message, true);
+    }
+  });
+
   $("#trainer-assessment-form").addEventListener("submit", async (formEvent) => {
     formEvent.preventDefault();
     const selected = state.selected;
@@ -953,6 +1001,7 @@
     .then((review) => {
       state.review = review;
       $("#session-title").textContent = review.session_id || "Video pregled";
+      populateParticipants(review);
       updateSyncLock(review);
       updateFrameControls();
       renderEvents();

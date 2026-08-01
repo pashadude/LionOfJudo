@@ -49,6 +49,11 @@ h3 { margin: 0 0 8px; font-size: 12px; font-weight: 650; }
 .event-meta { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
 .injury-label { display: block; margin-top: 5px; color: #875b17; font-size: 11px; }
 .review-main { min-width: 0; display: grid; gap: 14px; }
+.session-identity { padding: 12px 14px; border: 1px solid var(--line); background: var(--surface); }
+.session-identity-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; align-items: end; }
+.session-identity-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.session-downloads { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.session-identity-actions .button { min-width: 0; white-space: normal; }
 .video-section { padding: 12px; }
 .video-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 figure { margin: 0; min-width: 0; }
@@ -137,7 +142,7 @@ input:disabled, select:disabled, textarea:disabled { color: var(--muted); backgr
   .report-downloads { flex-wrap: wrap; }
   .report-downloads .button { flex: 1 1 180px; }
   .status { padding-inline: 12px; }
-  .video-grid, .charts-section, .form-grid { grid-template-columns: 1fr; }
+  .video-grid, .charts-section, .form-grid, .session-identity-grid { grid-template-columns: 1fr; }
   .video-section { padding: 10px; }
   video { width: 100%; max-width: 100%; }
   canvas { height: 150px; }
@@ -147,6 +152,10 @@ input:disabled, select:disabled, textarea:disabled { color: var(--muted); backgr
   .event-correction { grid-template-columns: 1fr; }
   .event-correction-actions { grid-column: auto; grid-template-columns: 1fr; }
   .form-actions .button { width: 100%; }
+  .session-identity { padding: 12px; }
+  .session-identity-actions { grid-column: auto; align-items: stretch; flex-direction: column; }
+  .session-downloads { display: grid; grid-template-columns: 1fr; }
+  .session-identity-actions .button { width: 100%; }
   .assessment-form, .duel-section, .evidence-section, .imu-section, .feedback-section { padding: 12px; }
   .segmented-control, .relation-control { grid-template-columns: 1fr; gap: 6px; }
   .segmented-control label span, .segmented-control label:first-child span, .segmented-control label:last-child span { border: 1px solid var(--line); border-radius: 5px; }

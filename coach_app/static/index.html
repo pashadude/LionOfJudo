@@ -37,6 +37,20 @@
     </aside>
 
     <main class="review-main">
+      <section class="session-identity" aria-label="Podaci učesnika sesije">
+        <form id="session-participants-form" class="session-identity-grid">
+          <label>Ime trenera<input id="trainer-name" type="text" maxlength="120" autocomplete="name"></label>
+          <label>Ime rvača<input id="wrestler-name" type="text" maxlength="120" autocomplete="name"></label>
+          <div class="session-identity-actions">
+            <button id="save-participants-button" class="button primary" type="submit">Sačuvaj podatke</button>
+            <div class="session-downloads" aria-label="Preuzimanje podataka za obuku">
+              <a class="button secondary" href="/trener_dataset.json" download>Preuzmi skup (JSON)</a>
+              <a class="button secondary" href="/trener_assessment_audit.json" download>Preuzmi audit (JSON)</a>
+            </div>
+          </div>
+        </form>
+      </section>
+
       <section class="video-section panel" aria-label="Sinhronizovani video prikaz">
         <div class="video-grid">
           <figure>
