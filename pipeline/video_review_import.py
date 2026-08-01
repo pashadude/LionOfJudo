@@ -7,12 +7,14 @@ import json
 import math
 import os
 import subprocess
+import tempfile
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from pipeline.face_blur import BlurReport, build_privacy_processor
 from pipeline.clip_extractor import (
     cut_clip,
     probe_duration,
@@ -598,6 +600,38 @@ def _export_clip(
     return result
 
 
+def _export_private_clip(
+    source: Path,
+    start_s: float,
+    end_s: float,
+    output: Path,
+    source_duration_s: float,
+    privacy_processor: Callable[[Path, Path], BlurReport],
+) -> BlurReport | None:
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".raw-private-", dir=output.parent
+    ) as raw:
+        raw_path = Path(raw) / output.name
+        exported = _export_clip(
+            source, start_s, end_s, raw_path, source_duration_s
+        )
+        if exported is None:
+            return None
+        report = privacy_processor(Path(exported), output)
+        if not isinstance(report, BlurReport) or not report.privacy_verified:
+            reason = report.failure_reason if isinstance(report, BlurReport) else None
+            raise ValueError(reason or "privatnost izvedenog videa nije potvrđena")
+        return report
+
+
+def _manifest_row(
+    report: BlurReport, relative_path: str, media_type: str
+) -> dict[str, Any]:
+    return report.to_manifest(relative_path, media_type)
+
+
 def _event_payload(
     raw: Mapping[str, Any],
     cutoff_s: float,
@@ -672,6 +706,7 @@ def import_session(
     model_path: Path | str = "yolo11x-pose.pt",
     device: str = "mps",
     event_threshold: float = 0.5,
+    privacy_processor: Callable[[Path, Path], BlurReport] | None = None,
 ) -> Path:
     """Import one Sony-master session and return its canonical review path."""
     sony_input = Path(os.path.abspath(Path(sony).expanduser()))
@@ -829,6 +864,11 @@ def import_session(
     output_dir.mkdir(parents=True, exist_ok=True)
     for name in ("media", "events", "previews", "analysis"):
         (output_dir / name).mkdir(parents=True, exist_ok=True)
+    privacy_processor = privacy_processor or build_privacy_processor(
+        model_path=model_path,
+        device=device,
+    )
+    derived_media_manifest: list[dict[str, Any]] = []
 
     for index, anchor in enumerate(anchor_values, start=1):
         sony_window = _window_for_clip(
@@ -844,53 +884,92 @@ def import_session(
             iphone_duration_s,
         )
         if sony_window:
-            _export_clip(
+            relative = f"previews/anchor_{index:02d}_sony.mp4"
+            report = _export_private_clip(
                 sony,
                 sony_window[0],
                 sony_window[1],
-                output_dir / "previews" / f"anchor_{index:02d}_sony.mp4",
+                output_dir / relative,
                 sony_duration_s,
+                privacy_processor,
             )
+            if report is not None:
+                derived_media_manifest.append(
+                    _manifest_row(report, relative, "anchor_preview")
+                )
         if iphone_window:
-            _export_clip(
+            relative = f"previews/anchor_{index:02d}_iphone.mp4"
+            report = _export_private_clip(
                 iphone,
                 iphone_window[0],
                 iphone_window[1],
-                output_dir / "previews" / f"anchor_{index:02d}_iphone.mp4",
+                output_dir / relative,
                 iphone_duration_s,
+                privacy_processor,
             )
+            if report is not None:
+                derived_media_manifest.append(
+                    _manifest_row(report, relative, "anchor_preview")
+                )
 
     for event in events:
         event_dir = output_dir / "events" / event["event_id"]
-        _export_clip(
+        sony_relative = f"events/{event['event_id']}/sony.mp4"
+        sony_report = _export_private_clip(
             sony,
             event["sony_start_s"],
             event["sony_end_s"],
             event_dir / "sony.mp4",
             sony_duration_s,
+            privacy_processor,
         )
-        _export_clip(
+        iphone_relative = f"events/{event['event_id']}/iphone.mp4"
+        iphone_report = _export_private_clip(
             iphone,
             event["iphone_start_s"],
             event["iphone_end_s"],
             event_dir / "iphone.mp4",
             iphone_duration_s,
+            privacy_processor,
         )
+        if sony_report is not None:
+            derived_media_manifest.append(
+                _manifest_row(sony_report, sony_relative, "event_clip")
+            )
+        if iphone_report is not None:
+            derived_media_manifest.append(
+                _manifest_row(iphone_report, iphone_relative, "event_clip")
+            )
+        event["media"] = {
+            "sony": f"/media/{sony_relative}",
+            "iphone": f"/media/{iphone_relative}",
+        }
 
     side_by_side = output_dir / "media" / "session_side_by_side.mp4"
-    make_side_by_side(
-        sony,
-        iphone,
-        time_map.slope,
-        time_map.intercept,
-        injury_cutoff_s,
-        side_by_side,
-    )
+    with tempfile.TemporaryDirectory(
+        prefix=".raw-private-", dir=side_by_side.parent
+    ) as raw:
+        raw_side_by_side = Path(raw) / side_by_side.name
+        make_side_by_side(
+            sony,
+            iphone,
+            time_map.slope,
+            time_map.intercept,
+            injury_cutoff_s,
+            raw_side_by_side,
+        )
+        side_report = privacy_processor(raw_side_by_side, side_by_side)
+    if not isinstance(side_report, BlurReport) or not side_report.privacy_verified:
+        reason = side_report.failure_reason if isinstance(side_report, BlurReport) else None
+        raise ValueError(reason or "privatnost side-by-side videa nije potvrđena")
     verify_media_export(
         side_by_side,
         injury_cutoff_s,
         EXPORT_TOLERANCE_S,
         probe=probe_duration,
+    )
+    derived_media_manifest.append(
+        _manifest_row(side_report, "session_side_by_side.mp4", "side_by_side")
     )
 
     if transcript_path is not None:
@@ -943,6 +1022,7 @@ def import_session(
         "events": events,
         "transkript": transcript_evidence,
         "sync_locked": True,
+        "derived_media_manifest": derived_media_manifest,
         "status": "Uvoz zavrsen; normalna obrada zaustavljena na potvrdenom preseku povrede.",
     }
     if previous is not None and force_reimport:

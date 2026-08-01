@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from coach_app.server import create_server
+from pipeline.face_blur import BlurReport
 from pipeline.video_review_contract import AnchorPair
 from pipeline.video_review_import import import_session
 from pipeline.voice_labels import TranscriptWord
@@ -28,9 +29,12 @@ class VideoReviewEndToEndTests(unittest.TestCase):
                 path = Path(path).resolve()
                 if path in {sony.resolve(), iphone.resolve()}:
                     return 60.0
-                if path.parent.name == "e-normal":
+                parent = path.parent.name
+                if parent.startswith(".raw-private-"):
+                    parent = path.parent.parent.name
+                if parent == "e-normal":
                     return 3.0
-                if path.parent.name == "povreda":
+                if parent == "povreda":
                     return 2.0
                 if path.name == "session_side_by_side.mp4":
                     return 20.0
@@ -41,6 +45,17 @@ class VideoReviewEndToEndTests(unittest.TestCase):
                 output.parent.mkdir(parents=True, exist_ok=True)
                 output.write_bytes(b"synthetic media export")
                 return output
+
+            def privatize(raw_path, output_path):
+                output_path = Path(output_path)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(Path(raw_path).read_bytes())
+                return BlurReport(
+                    total_frames=1,
+                    first_pass_candidates=1,
+                    second_pass_candidates=0,
+                    privacy_verified=True,
+                )
 
             anchors = [
                 AnchorPair("pocetak", 10.0, 30.0, True, 3),
@@ -85,6 +100,7 @@ class VideoReviewEndToEndTests(unittest.TestCase):
                     injury_cutoff_s=20.0,
                     blue_seed=(100.0, 200.0, 180.0, 360.0),
                     transcript_path=transcript,
+                    privacy_processor=privatize,
                 )
 
             mock_pose.assert_called_once_with(

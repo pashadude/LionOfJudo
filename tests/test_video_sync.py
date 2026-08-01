@@ -7,6 +7,7 @@ from pipeline.video_review_contract import (
     AnchorPair,
     ReviewEvent,
     ReviewSession,
+    _validate_derived_media_manifest,
     validate_review_payload,
     validate_review_session,
 )
@@ -142,6 +143,33 @@ class VideoSyncTests(unittest.TestCase):
         payload["frame_metrics"][0]["intenzitet_pokreta_0_100"] = 50.0
         with self.assertRaisesRegex(ValueError, "event_metrics"):
             validate_review_payload(payload)
+
+    def test_media_manifest_rejects_traversal_and_unrecognized_media_location(self):
+        common = {
+            "total_frames": 1,
+            "first_pass_candidates": 1,
+            "second_pass_candidates": 0,
+            "privacy_verified": True,
+            "failure_reason": None,
+        }
+        for relative_path, media_type in (
+            ("events/../review.json", "event_clip"),
+            ("analysis/fake.mp4", "side_by_side"),
+        ):
+            with self.subTest(relative_path=relative_path):
+                with self.assertRaises(ValueError):
+                    _validate_derived_media_manifest(
+                        {
+                            "derived_media_manifest": [
+                                {
+                                    **common,
+                                    "relative_path": relative_path,
+                                    "media_type": media_type,
+                                }
+                            ]
+                        },
+                        {"e-1"},
+                    )
 
     def _session(self, **overrides):
         values = {

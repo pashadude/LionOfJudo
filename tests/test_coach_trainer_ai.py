@@ -26,6 +26,17 @@ class CoachTrainerAiTests(unittest.TestCase):
         self.root = Path(self.raw.name)
         legacy = migration_fixtures.VideoReviewMigrationTests().fixture(self.root)
         self.review = migrate_review_payload(legacy)
+        self.review["derived_media_manifest"] = [
+            {
+                "relative_path": "session_side_by_side.mp4",
+                "media_type": "side_by_side",
+                "total_frames": 1,
+                "first_pass_candidates": 1,
+                "second_pass_candidates": 0,
+                "privacy_verified": True,
+                "failure_reason": None,
+            }
+        ]
         self.review_path = self.root / "review.json"
         self.review_path.write_text(
             json.dumps(self.review, ensure_ascii=False, indent=2),
@@ -33,7 +44,7 @@ class CoachTrainerAiTests(unittest.TestCase):
         )
         write_reports(self.review_path, self.review)
         (self.root / "media").mkdir(exist_ok=True)
-        (self.root / "media" / "derived.mp4").write_bytes(b"derived-media")
+        (self.root / "media" / "session_side_by_side.mp4").write_bytes(b"derived-media")
         self.now = FIXED_TIME
         self.service = TrainerAiService(
             self.root,
@@ -105,8 +116,8 @@ class CoachTrainerAiTests(unittest.TestCase):
         legacy = json.loads(self.review_path.read_text(encoding="utf-8"))
         self.assertEqual(legacy["events"][0]["trener_procene"], [])
         self.assertEqual(
-            (self.root / "media" / "derived.mp4").stat().st_ino,
-            (snapshot.root / "media" / "derived.mp4").stat().st_ino,
+            (self.root / "media" / "session_side_by_side.mp4").stat().st_ino,
+            (snapshot.root / "media" / "session_side_by_side.mp4").stat().st_ino,
         )
 
     def test_store_rejects_mismatched_event_metrics_without_switching(self):
@@ -127,11 +138,11 @@ class CoachTrainerAiTests(unittest.TestCase):
             self.review["events"],
             (self.root / "izvestaj.csv").read_text(encoding="utf-8"),
             (self.root / "izvestaj.md").read_text(encoding="utf-8"),
-            staged_media={"media/derived.mp4": replacement},
+            staged_media={"media/session_side_by_side.mp4": replacement},
         )
         server = self.start_server()
 
-        with urlopen(server.base_url + "/media/derived.mp4") as response:
+        with urlopen(server.base_url + "/media/session_side_by_side.mp4") as response:
             body = response.read()
 
         self.assertEqual(body, b"new-generation-media")
@@ -148,7 +159,7 @@ class CoachTrainerAiTests(unittest.TestCase):
                 "markdown",
             )
 
-        copied = snapshot.root / "media" / "derived.mp4"
+        copied = snapshot.root / "media" / "session_side_by_side.mp4"
         self.assertTrue(copied.is_file())
         fsync_file.assert_any_call(copied)
 

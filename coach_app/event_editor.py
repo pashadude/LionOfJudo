@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping
 import uuid
 
 from pipeline.clip_extractor import cut_clip, probe_duration, verify_media_export
+from pipeline.face_blur import BlurReport
 from pipeline.trainer_ai_state import start_new_event_revision
 from pipeline.video_review_contract import validate_review_payload
 from pipeline.video_review_reports import event_is_injury, write_reports
@@ -63,6 +64,7 @@ class EventEditor:
         media_probe: Callable[[Path], float] = probe_duration,
         review_loader: Callable[[], dict[str, Any]] | None = None,
         generation_activator: Callable[..., None] | None = None,
+        privacy_processor: Callable[[Path, Path], BlurReport] | None = None,
     ) -> None:
         self.session_dir = Path(session_dir).resolve()
         self.review_path = self.session_dir / "review.json"
@@ -71,6 +73,7 @@ class EventEditor:
         self.media_probe = media_probe
         self.review_loader = review_loader or (lambda: load_review_json(self.review_path))
         self.generation_activator = generation_activator
+        self.privacy_processor = privacy_processor
 
     def create(self, payload: object) -> dict[str, Any]:
         return self._apply("create", payload)
@@ -212,6 +215,8 @@ class EventEditor:
                     self._refresh_event(review, item)
                     if review.get("version", 1) >= 3:
                         start_new_event_revision(review, item)
+            if deleted:
+                self._update_manifest(review, deleted, [])
             review["event_metrics"] = copy.deepcopy(review["events"])
             validate_review_payload(review)
             if review.get("version", 1) >= 3:
@@ -334,26 +339,78 @@ class EventEditor:
                     f"izvorni {camera} video ne sme biti unutar upravljanog events direktorijuma"
                 )
 
-    def _export_event(self, review: Mapping[str, Any], event: Mapping[str, Any], output: Path) -> None:
+    def _export_event(
+        self, review: Mapping[str, Any], event: Mapping[str, Any], output: Path
+    ) -> list[dict[str, Any]]:
+        if self.privacy_processor is None:
+            raise MediaExportError("privacy processor nije dostupan")
         windows = {
             "sony": (float(event["sony_start_s"]), float(event["sony_end_s"])),
             "iphone": (float(event["iphone_start_s"]), float(event["iphone_end_s"])),
         }
+        manifest_rows = []
         for camera, (start, end) in windows.items():
             destination = output / f"{camera}.mp4"
-            result = self.clip_exporter(
-                self._source_path(review, camera), start, end, destination
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            raw = destination.with_name(f".{camera}.raw.mp4")
+            try:
+                result = self.clip_exporter(
+                    self._source_path(review, camera), start, end, raw
+                )
+                verify_media_export(
+                    Path(result),
+                    end - start,
+                    probe=self.media_probe,
+                )
+                report = self.privacy_processor(Path(result), destination)
+                if not isinstance(report, BlurReport) or not report.privacy_verified:
+                    reason = (
+                        report.failure_reason if isinstance(report, BlurReport) else None
+                    )
+                    raise MediaExportError(
+                        reason or "privatnost izvedenog videa nije potvrđena"
+                    )
+                verify_media_export(
+                    destination,
+                    end - start,
+                    probe=self.media_probe,
+                )
+                relative = f"events/{event['event_id']}/{camera}.mp4"
+                manifest_rows.append(
+                    report.to_manifest(relative, "event_clip")
+                )
+            finally:
+                raw.unlink(missing_ok=True)
+        return manifest_rows
+
+    @staticmethod
+    def _update_manifest(
+        review: dict[str, Any],
+        touched: set[str],
+        new_rows: list[dict[str, Any]],
+    ) -> None:
+        prefixes = tuple(f"events/{event_id}/" for event_id in touched)
+        existing = review.get("derived_media_manifest", [])
+        if not isinstance(existing, list):
+            raise ValueError("derived_media_manifest mora biti lista")
+        retained = [
+            copy.deepcopy(row)
+            for row in existing
+            if isinstance(row, Mapping)
+            and not any(
+                str(row.get("relative_path", "")).startswith(prefix)
+                for prefix in prefixes
             )
-            verify_media_export(
-                Path(result),
-                end - start,
-                probe=self.media_probe,
-            )
+        ]
+        review["derived_media_manifest"] = sorted(
+            retained + copy.deepcopy(new_rows),
+            key=lambda row: str(row.get("relative_path", "")),
+        )
 
     def _persist_transaction(
         self,
         original: Mapping[str, Any],
-        review: Mapping[str, Any],
+        review: dict[str, Any],
         generated: set[str],
         deleted: set[str],
     ) -> None:
@@ -365,14 +422,22 @@ class EventEditor:
         transaction.mkdir(parents=True)
         try:
             try:
+                manifest_rows = []
                 for event_id in generated:
                     event = next(
                         event for event in review["events"]
                         if event["event_id"] == event_id
                     )
-                    self._export_event(review, event, staged / event_id)
+                    manifest_rows.extend(
+                        self._export_event(review, event, staged / event_id)
+                    )
             except Exception as exc:
                 raise MediaExportError(f"izvoz medija nije uspeo: {exc}") from exc
+
+            self._update_manifest(
+                review, generated | deleted, manifest_rows
+            )
+            validate_review_payload(review)
 
             touched = generated | deleted
             installed: set[str] = set()
@@ -415,6 +480,7 @@ class EventEditor:
             staging_root = Path(raw)
             staged_media: dict[str, Path] = {}
             try:
+                manifest_rows = []
                 for event_id in generated:
                     event = next(
                         event
@@ -422,13 +488,19 @@ class EventEditor:
                         if event["event_id"] == event_id
                     )
                     event_root = staging_root / event_id
-                    self._export_event(review, event, event_root)
+                    manifest_rows.extend(
+                        self._export_event(review, event, event_root)
+                    )
                     for camera in ("sony", "iphone"):
                         staged_media[f"events/{event_id}/{camera}.mp4"] = (
                             event_root / f"{camera}.mp4"
                         )
             except Exception as exc:
                 raise MediaExportError(f"izvoz medija nije uspeo: {exc}") from exc
+            self._update_manifest(
+                review, generated | deleted, manifest_rows
+            )
+            validate_review_payload(review)
             self.generation_activator(
                 review,
                 staged_media=staged_media,

@@ -8,8 +8,10 @@ import tempfile
 import numpy as np
 
 from pipeline.clip_extractor import verify_media_export as canonical_verify_media_export
+from pipeline.face_blur import BlurReport
 from pipeline.video_review_contract import AnchorPair
 from pipeline.video_review_import import (
+    _export_private_clip,
     _merge_trainer_annotations,
     import_session,
     make_side_by_side,
@@ -27,6 +29,12 @@ class VideoReviewImportTests(TestCase):
         )
         self.mock_probe_fps = self._probe_fps_patcher.start()
         self.addCleanup(self._probe_fps_patcher.stop)
+        self._privacy_patcher = patch(
+            "pipeline.video_review_import.build_privacy_processor",
+            return_value=self._fake_privacy_processor,
+        )
+        self.mock_build_privacy = self._privacy_patcher.start()
+        self.addCleanup(self._privacy_patcher.stop)
 
     @patch("pipeline.video_review_import.subprocess.run")
     def test_side_by_side_maps_iphone_with_affine_setpts(self, mock_run):
@@ -462,6 +470,84 @@ class VideoReviewImportTests(TestCase):
     @patch("pipeline.video_review_import.run_pose_analysis", return_value=[])
     @patch("pipeline.video_review_import.make_side_by_side")
     @patch("pipeline.video_review_import.cut_clip")
+    def test_import_fails_closed_when_privacy_verification_fails(
+        self, mock_cut, mock_composite, _mock_pose
+    ):
+        with self._temporary_directory() as raw_root:
+            root = Path(raw_root)
+            sony, iphone = self._sources(root)
+            mock_cut.side_effect = self._touch_result
+            mock_composite.side_effect = self._touch_result
+
+            def reject(_raw_path, _output_path):
+                return BlurReport(
+                    total_frames=1,
+                    first_pass_candidates=1,
+                    second_pass_candidates=1,
+                    privacy_verified=False,
+                    failure_reason="lice je ostalo vidljivo",
+                )
+
+            with patch(
+                "pipeline.video_review_import.probe_duration",
+                side_effect=self._duration_for_path,
+            ):
+                with self.assertRaisesRegex(ValueError, "lice je ostalo vidljivo"):
+                    import_session(
+                        sony,
+                        iphone,
+                        root / "session",
+                        self._anchors(),
+                        20.0,
+                        (1, 2, 3, 4),
+                        privacy_processor=reject,
+                    )
+
+            self.assertFalse((root / "session" / "review.json").exists())
+            self.assertEqual(
+                list((root / "session" / "previews").glob("*.mp4")), []
+            )
+
+    def test_failed_private_clip_export_preserves_previous_verified_output(self):
+        with self._temporary_directory() as raw_root:
+            root = Path(raw_root)
+            source = root / "source.mp4"
+            output = root / "events" / "e-1" / "sony.mp4"
+            source.write_bytes(b"source")
+            output.parent.mkdir(parents=True)
+            output.write_bytes(b"previous-verified")
+
+            def reject(_raw_path, _output_path):
+                return BlurReport(
+                    total_frames=1,
+                    first_pass_candidates=1,
+                    second_pass_candidates=1,
+                    privacy_verified=False,
+                    failure_reason="lice je ostalo vidljivo",
+                )
+
+            with patch(
+                "pipeline.video_review_import.cut_clip",
+                side_effect=self._touch_result,
+            ), patch(
+                "pipeline.video_review_import.probe_duration",
+                return_value=1.0,
+            ):
+                with self.assertRaisesRegex(ValueError, "lice je ostalo vidljivo"):
+                    _export_private_clip(
+                        source,
+                        0.0,
+                        1.0,
+                        output,
+                        2.0,
+                        reject,
+                    )
+
+            self.assertEqual(output.read_bytes(), b"previous-verified")
+
+    @patch("pipeline.video_review_import.run_pose_analysis", return_value=[])
+    @patch("pipeline.video_review_import.make_side_by_side")
+    @patch("pipeline.video_review_import.cut_clip")
     def test_end_of_source_cutoff_has_preceding_injury_window(
         self, mock_cut, mock_composite, _mock_pose
     ):
@@ -470,14 +556,23 @@ class VideoReviewImportTests(TestCase):
             sony, iphone = self._sources(root)
             mock_cut.side_effect = self._touch_result
             mock_composite.side_effect = self._touch_result
+
+            def duration(path):
+                path = Path(path)
+                parent = path.parent.name
+                if parent.startswith(".raw-private-"):
+                    parent = path.parent.parent.name
+                if path.name == "sony.mp4" and parent != "povreda":
+                    return 10.0
+                if path.name == "iphone.mov" and parent != "povreda":
+                    return 60.0
+                if path.name == "session_side_by_side.mp4":
+                    return 10.0
+                return self._duration_for_path(path)
+
             with patch(
                 "pipeline.video_review_import.probe_duration",
-                side_effect=lambda path: (
-                    10.0 if Path(path).name == "sony.mp4" and Path(path).parent.name != "povreda" else
-                    60.0 if Path(path).name == "iphone.mov" and Path(path).parent.name != "povreda" else
-                    10.0 if Path(path).name == "session_side_by_side.mp4" else
-                    self._duration_for_path(path)
-                ),
+                side_effect=duration,
             ):
                 review_path = import_session(
                     sony,
@@ -545,6 +640,13 @@ class VideoReviewImportTests(TestCase):
             )
             self.assertTrue((review_path.parent / "media" / "session_side_by_side.mp4").exists())
             self.assertTrue((review_path.parent / "analysis" / "import_summary.json").exists())
+            manifest = review["derived_media_manifest"]
+            self.assertTrue(manifest)
+            self.assertTrue(all(row["privacy_verified"] is True for row in manifest))
+            self.assertEqual(
+                {row["media_type"] for row in manifest},
+                {"anchor_preview", "event_clip", "side_by_side"},
+            )
 
     @patch(
         "pipeline.video_review_import.run_pose_analysis",
@@ -752,15 +854,30 @@ class VideoReviewImportTests(TestCase):
         return output
 
     @staticmethod
+    def _fake_privacy_processor(raw_path, output_path):
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(Path(raw_path).read_bytes())
+        return BlurReport(
+            total_frames=1,
+            first_pass_candidates=1,
+            second_pass_candidates=0,
+            privacy_verified=True,
+        )
+
+    @staticmethod
     def _duration_for_path(path):
         path = Path(path)
-        if path.name in {"sony.mp4", "iphone.mov"} and path.parent.name not in {
+        parent_name = path.parent.name
+        if parent_name.startswith(".raw-private-"):
+            parent_name = path.parent.parent.name
+        if path.name in {"sony.mp4", "iphone.mov"} and parent_name not in {
             "e-1", "povreda", "previews"
         }:
             return 60.0
-        if path.parent.name == "e-1":
+        if parent_name == "e-1":
             return 3.0
-        if path.parent.name == "povreda":
+        if parent_name == "povreda":
             return 1.0
         if path.name == "session_side_by_side.mp4":
             return 20.0

@@ -20,6 +20,7 @@ from pipeline.video_review_contract import (
 )
 from pipeline.video_sync import fit_time_map
 from pipeline.clip_extractor import cut_clip, probe_duration
+from pipeline.face_blur import BlurReport, build_privacy_processor
 from pipeline.video_review_reports import event_is_injury, write_reports
 from pipeline.video_review_storage import atomic_write_review, load_review_json
 
@@ -158,6 +159,7 @@ class ReviewServer:
         clip_exporter: Callable[..., Path] = cut_clip,
         media_probe: Callable[[Path], float] = probe_duration,
         clock: Callable[[], datetime] = _default_clock,
+        privacy_processor: Callable[[Path, Path], BlurReport] | None = None,
     ):
         self.session_dir = Path(session_dir).expanduser().resolve()
         if not self.session_dir.is_dir():
@@ -177,6 +179,7 @@ class ReviewServer:
             clock=clock,
             mutation_lock=self.mutation_lock,
         )
+        privacy_processor = privacy_processor or build_privacy_processor()
         self.event_editor = EventEditor(
             self.session_dir,
             lock=self.mutation_lock,
@@ -184,6 +187,7 @@ class ReviewServer:
             media_probe=media_probe,
             review_loader=self.trainer_ai_service.load_review,
             generation_activator=self.trainer_ai_service.activate_review,
+            privacy_processor=privacy_processor,
         )
         self.httpd = ThreadingHTTPServer(("127.0.0.1", port), _ReviewHandler)
         self.httpd.review_server = self  # type: ignore[attr-defined]
@@ -207,6 +211,7 @@ def create_server(
     clip_exporter: Callable[..., Path] = cut_clip,
     media_probe: Callable[[Path], float] = probe_duration,
     clock: Callable[[], datetime] = _default_clock,
+    privacy_processor: Callable[[Path, Path], BlurReport] | None = None,
 ) -> ReviewServer:
     return ReviewServer(
         Path(session_dir),
@@ -214,6 +219,7 @@ def create_server(
         clip_exporter=clip_exporter,
         media_probe=media_probe,
         clock=clock,
+        privacy_processor=privacy_processor,
     )
 
 
@@ -283,9 +289,9 @@ class _ReviewHandler(BaseHTTPRequestHandler):
                 self._serve_file(candidate, snapshot.root)
             elif path.startswith("/media/"):
                 relative = path.removeprefix("/media/")
-                if ".." in Path(relative).parts:
-                    raise FileNotFoundError
                 snapshot = self.app.trainer_ai_service.store.resolve_current()
+                review = _strict_load(snapshot.review_path)
+                relative = self._verified_media_relative(review, relative)
                 if relative.startswith(("events/", "previews/", "analysis/")):
                     candidate = snapshot.root / relative
                 else:
@@ -293,6 +299,8 @@ class _ReviewHandler(BaseHTTPRequestHandler):
                 self._serve_file(candidate, snapshot.root)
             else:
                 relative = path.removeprefix("/")
+                if relative.startswith(("events/", "previews/", "analysis/", "media/")):
+                    raise FileNotFoundError
                 self._serve_file(self.app.session_dir / relative, self.app.session_dir)
         except FileNotFoundError:
             self._error(HTTPStatus.NOT_FOUND, "resurs nije pronađen")
@@ -311,6 +319,48 @@ class _ReviewHandler(BaseHTTPRequestHandler):
             or path == "/.review-generations"
             or path.startswith("/.review-generations/")
         )
+
+    @staticmethod
+    def _verified_media_relative(
+        review: Mapping[str, Any], relative_value: str
+    ) -> str:
+        relative = Path(relative_value)
+        if (
+            not relative_value
+            or relative.is_absolute()
+            or ".." in relative.parts
+            or "." in relative.parts
+            or "\\" in relative_value
+        ):
+            raise FileNotFoundError
+        normalized = relative.as_posix()
+        manifest = review.get("derived_media_manifest")
+        if not isinstance(manifest, list):
+            raise FileNotFoundError
+        matches = [
+            row
+            for row in manifest
+            if isinstance(row, Mapping)
+            and row.get("relative_path") == normalized
+            and row.get("privacy_verified") is True
+            and (
+                (
+                    row.get("media_type") == "event_clip"
+                    and normalized.startswith("events/")
+                )
+                or (
+                    row.get("media_type") == "anchor_preview"
+                    and normalized.startswith("previews/")
+                )
+                or (
+                    row.get("media_type") == "side_by_side"
+                    and normalized == "session_side_by_side.mp4"
+                )
+            )
+        ]
+        if len(matches) != 1:
+            raise FileNotFoundError
+        return normalized
 
     def do_PUT(self) -> None:
         path = unquote(urlsplit(self.path).path)

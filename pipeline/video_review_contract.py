@@ -1,9 +1,66 @@
 from dataclasses import dataclass
 import math
+from pathlib import PurePosixPath
+import re
 from typing import Any, Mapping
 
 from pipeline.trainer_ai_evaluator import compute_analysis_fingerprint
 from pipeline.trainer_ai_state import validate_trainer_ai_event
+
+
+ANCHOR_PREVIEW_PATTERN = re.compile(r"^previews/anchor_\d{2}_(?:sony|iphone)\.mp4$")
+
+
+def _validate_derived_media_manifest(
+    payload: Mapping[str, Any], event_ids: set[str]
+) -> None:
+    if "derived_media_manifest" not in payload:
+        return
+    manifest = payload.get("derived_media_manifest")
+    if not isinstance(manifest, list):
+        raise TypeError("derived_media_manifest mora biti JSON lista")
+    seen = set()
+    for row in manifest:
+        if not isinstance(row, Mapping):
+            raise TypeError("derived_media_manifest red mora biti JSON objekat")
+        relative = row.get("relative_path")
+        if not isinstance(relative, str) or not relative or "\\" in relative:
+            raise ValueError("manifest relative_path nije validan")
+        path = PurePosixPath(relative)
+        if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+            raise ValueError("manifest relative_path nije bezbedan")
+        if relative in seen:
+            raise ValueError("manifest relative_path mora biti jedinstven")
+        seen.add(relative)
+        media_type = row.get("media_type")
+        if media_type == "event_clip":
+            if (
+                len(path.parts) != 3
+                or path.parts[0] != "events"
+                or path.parts[1] not in event_ids
+                or path.parts[2] not in {"sony.mp4", "iphone.mp4"}
+            ):
+                raise ValueError("event_clip manifest putanja nije validna")
+        elif media_type == "anchor_preview":
+            if ANCHOR_PREVIEW_PATTERN.fullmatch(relative) is None:
+                raise ValueError("anchor_preview manifest putanja nije validna")
+        elif media_type == "side_by_side":
+            if relative != "session_side_by_side.mp4":
+                raise ValueError("side_by_side manifest putanja nije validna")
+        else:
+            raise ValueError("manifest media_type nije validan")
+        for field in ("total_frames", "first_pass_candidates", "second_pass_candidates"):
+            value = row.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"manifest {field} mora biti nenegativan ceo broj")
+        verified = row.get("privacy_verified")
+        if not isinstance(verified, bool):
+            raise TypeError("manifest privacy_verified mora biti boolean")
+        reason = row.get("failure_reason")
+        if reason is not None and not isinstance(reason, str):
+            raise TypeError("manifest failure_reason mora biti tekst ili null")
+        if verified and (row["total_frames"] <= 0 or reason is not None):
+            raise ValueError("potvrđen manifest mora imati kadrove i bez greške")
 
 
 def _finite_float(value: object, field_name: str) -> float:
@@ -236,6 +293,7 @@ def validate_review_payload(payload: Mapping[str, Any]) -> None:
     event_ids = [event.event_id for event in events]
     if len(event_ids) != len(set(event_ids)):
         raise ValueError("event IDs must be unique")
+    _validate_derived_media_manifest(payload, set(event_ids))
     first_anchor = min(anchor.sony_s for anchor in anchors)
     normal_events = sorted(session.normal_events(), key=lambda event: event.sony_start_s)
     for event in events:

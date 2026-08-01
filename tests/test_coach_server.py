@@ -16,6 +16,12 @@ class CoachServerTests(unittest.TestCase):
         self.root = Path(self.raw.name)
         (self.root / "media").mkdir()
         (self.root / "media" / "clip.mp4").write_bytes(b"0123456789")
+        (self.root / "media" / "session_side_by_side.mp4").write_bytes(b"0123456789")
+        (self.root / "media" / "unlisted.mp4").write_bytes(b"unlisted")
+        (self.root / "events" / "e-1").mkdir(parents=True)
+        (self.root / "events" / "e-1" / "sony.mp4").write_bytes(b"raw-event")
+        (self.root / "previews").mkdir()
+        (self.root / "previews" / "anchor_01_sony.mp4").write_bytes(b"raw-preview")
         self.outside = self.root.parent / f"coach-outside-{os.getpid()}"
         self.outside.write_bytes(b"outside")
         self.review_path = self.root / "review.json"
@@ -49,6 +55,17 @@ class CoachServerTests(unittest.TestCase):
                     "time_map": {"slope": 1.0, "intercept": -5.0},
                     "injury_cutoff_s": 20.0,
                     "sync_locked": True,
+                    "derived_media_manifest": [
+                        {
+                            "relative_path": "session_side_by_side.mp4",
+                            "media_type": "side_by_side",
+                            "total_frames": 10,
+                            "first_pass_candidates": 2,
+                            "second_pass_candidates": 0,
+                            "privacy_verified": True,
+                            "failure_reason": None,
+                        }
+                    ],
                     "frame_metrics": [
                         {
                             "timestamp_s": 0.0,
@@ -314,7 +331,14 @@ class CoachServerTests(unittest.TestCase):
         review["event_metrics"] = []
         review["frame_metrics"] = []
         review["sync_locked"] = False
+        review["derived_media_manifest"] = []
         self.review_path.write_text(json.dumps(review), encoding="utf-8")
+        (self.root / "media" / "session_side_by_side.mp4").unlink()
+        (self.root / "events" / "e-1" / "sony.mp4").unlink()
+        (self.root / "events" / "e-1").rmdir()
+        (self.root / "events").rmdir()
+        (self.root / "previews" / "anchor_01_sony.mp4").unlink()
+        (self.root / "previews").rmdir()
         server = self.start_server()
         anchors = [
             {
@@ -368,13 +392,64 @@ class CoachServerTests(unittest.TestCase):
 
     def test_media_range_and_mime_behavior_support_html_video(self):
         server = self.start_server()
-        request = Request(server.base_url + "/media/clip.mp4", headers={"Range": "bytes=2-5"})
+        request = Request(
+            server.base_url + "/media/session_side_by_side.mp4",
+            headers={"Range": "bytes=2-5"},
+        )
         with urlopen(request) as response:
             self.assertEqual(response.status, 206)
             self.assertEqual(response.read(), b"2345")
             self.assertEqual(response.headers["Content-Type"], "video/mp4")
             self.assertEqual(response.headers["Content-Range"], "bytes 2-5/10")
             self.assertEqual(response.headers["Accept-Ranges"], "bytes")
+
+    def test_only_manifest_verified_media_is_served(self):
+        server = self.start_server()
+
+        with urlopen(server.base_url + "/media/session_side_by_side.mp4") as response:
+            self.assertEqual(response.read(), b"0123456789")
+        for path in (
+            "/events/e-1/sony.mp4",
+            "/previews/anchor_01_sony.mp4",
+            "/media/unlisted.mp4",
+            "/media/events/e-1/sony.mp4",
+            "/media/previews/anchor_01_sony.mp4",
+        ):
+            with self.subTest(path=path):
+                with self.assertRaises(HTTPError) as raised:
+                    urlopen(server.base_url + path)
+                self.assertEqual(raised.exception.code, 404)
+
+        review = json.loads(self.review_path.read_text(encoding="utf-8"))
+        review["derived_media_manifest"][0]["privacy_verified"] = False
+        self.review_path.write_text(json.dumps(review), encoding="utf-8")
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(server.base_url + "/media/session_side_by_side.mp4")
+        self.assertEqual(raised.exception.code, 404)
+
+    def test_manifest_cannot_publish_arbitrary_analysis_file(self):
+        analysis = self.root / "analysis"
+        analysis.mkdir(exist_ok=True)
+        (analysis / "fake.mp4").write_bytes(b"not-private")
+        review = json.loads(self.review_path.read_text(encoding="utf-8"))
+        review["derived_media_manifest"].append(
+            {
+                "relative_path": "analysis/fake.mp4",
+                "media_type": "side_by_side",
+                "total_frames": 1,
+                "first_pass_candidates": 0,
+                "second_pass_candidates": 0,
+                "privacy_verified": True,
+                "failure_reason": None,
+            }
+        )
+        self.review_path.write_text(json.dumps(review), encoding="utf-8")
+        server = self.start_server()
+
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(server.base_url + "/media/analysis/fake.mp4")
+
+        self.assertEqual(raised.exception.code, 404)
 
     def test_static_ui_contains_serbian_contract_and_chart_hooks(self):
         server = self.start_server()

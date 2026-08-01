@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from coach_app.server import create_server
+from pipeline.face_blur import BlurReport
 from pipeline.trainer_ai_state import migrate_trainer_ai_payload
 
 
@@ -120,16 +121,29 @@ class CoachEventEditorTests(unittest.TestCase):
     def fake_probe(path):
         return float(Path(path).read_text(encoding="ascii"))
 
-    def start_server(self, *, media_probe=None):
+    def start_server(self, *, media_probe=None, privacy_processor=None):
         server = create_server(
             self.root,
             port=0,
             clip_exporter=self.fake_cut,
             media_probe=media_probe or self.fake_probe,
+            privacy_processor=privacy_processor or self.fake_privacy,
         )
         thread = server.start_in_thread()
         self.addCleanup(lambda: self.stop_server(server, thread))
         return server
+
+    @staticmethod
+    def fake_privacy(raw_path, output_path):
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(Path(raw_path).read_bytes())
+        return BlurReport(
+            total_frames=1,
+            first_pass_candidates=1,
+            second_pass_candidates=0,
+            privacy_verified=True,
+        )
 
     def upgrade_to_v3(self):
         review = json.loads(self.review_path.read_text(encoding="utf-8"))
@@ -196,6 +210,13 @@ class CoachEventEditorTests(unittest.TestCase):
             [event["event_id"] for event in result["review"]["event_metrics"]],
             [event["event_id"] for event in result["review"]["events"]],
         )
+        rows = [
+            row
+            for row in result["review"]["derived_media_manifest"]
+            if row["relative_path"].startswith("events/e-coach-001/")
+        ]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row["privacy_verified"] is True for row in rows))
 
     def test_bounds_update_preserves_annotation_and_rebuilds_media(self):
         server = self.start_server()
@@ -473,6 +494,47 @@ class CoachEventEditorTests(unittest.TestCase):
         self.assertFalse((self.root / "events" / "e-coach-001").exists())
         events_dir = self.root / "events"
         self.assertFalse(events_dir.exists() and any(path.name.startswith(".txn-") for path in events_dir.iterdir()))
+
+    def test_v3_privacy_failure_keeps_current_generation_and_media(self):
+        self.upgrade_to_v3()
+
+        def rejected_privacy(_raw, _output):
+            return BlurReport(
+                total_frames=1,
+                first_pass_candidates=1,
+                second_pass_candidates=1,
+                privacy_verified=False,
+                failure_reason="lice je ostalo vidljivo",
+            )
+
+        server = self.start_server(privacy_processor=rejected_privacy)
+        self.request_json(
+            server,
+            "/api/events/e-1/trainer-assessments",
+            method="POST",
+            payload={
+                "status_vidljivosti": "dovoljno_vidljivo",
+                "potvrdena_tehnika": "Tai-otoshi",
+                "ocena": 4,
+                "razlog": "Na 8.500 s ulazak prethodi rotaciji.",
+                "citirani_sony_trenuci_s": [8.5],
+            },
+        )
+        before = server.trainer_ai_service.store.resolve_current()
+        before_review = before.review_path.read_bytes()
+
+        error = self.assert_http_error(
+            422,
+            server,
+            "/api/events/e-1/bounds",
+            method="PUT",
+            payload={"sony_start_s": 8.25, "sony_end_s": 9.75},
+        )
+
+        self.assertIn("lice je ostalo vidljivo", error["error"])
+        after = server.trainer_ai_service.store.resolve_current()
+        self.assertEqual(after.generation_id, before.generation_id)
+        self.assertEqual(after.review_path.read_bytes(), before_review)
 
 
 if __name__ == "__main__":

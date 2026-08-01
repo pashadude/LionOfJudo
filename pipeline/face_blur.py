@@ -1,246 +1,689 @@
 #!/usr/bin/env python3
-"""
-Privacy blur: blur every face except the designated athlete (the son).
+"""Fail-closed blur-all processing for derived review media."""
 
-Fail-safe direction: blur by default. Only a confirmed, tracked person is
-exempt. If his track is lost, his face gets blurred too for those frames
-(reported) — never the other way around.
+from __future__ import annotations
 
-Two detection layers per frame:
-1. YOLO11-pose head keypoints (nose/eyes/ears) -> blur ellipse per person.
-2. YuNet face detector as a safety net for anyone pose missed
-   (partial bodies, spectators, referees).
-"""
-
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+import os
 from pathlib import Path
+import subprocess
+from typing import Any, Callable
+import uuid
 
 import cv2
 import numpy as np
 
+
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 YUNET_PATH = MODELS_DIR / "face_detection_yunet_2023mar.onnx"
-
-HEAD_KPTS = [0, 1, 2, 3, 4]  # nose, eyes, ears (COCO)
-KPT_CONF = 0.3
-ELLIPSE_SCALE = 1.7
-MIN_HEAD_RADIUS = 12  # px; small/distant heads still get a meaningful blur
+HEAD_KPTS = (0, 1, 2, 3, 4)
+DEFAULT_KPT_CONFIDENCE = 0.30
+MIN_HEAD_RADIUS = 12
 
 
-@dataclass
+@dataclass(frozen=True)
 class BlurReport:
     total_frames: int = 0
-    son_visible_frames: int = 0
-    son_lost_ranges: list[tuple[int, int]] = field(default_factory=list)
+    first_pass_candidates: int = 0
+    second_pass_candidates: int = 0
+    privacy_verified: bool = False
+    failure_reason: str | None = None
+
+    def to_manifest(self, relative_path: str, media_type: str) -> dict[str, Any]:
+        return {
+            "relative_path": relative_path,
+            "media_type": media_type,
+            "total_frames": self.total_frames,
+            "first_pass_candidates": self.first_pass_candidates,
+            "second_pass_candidates": self.second_pass_candidates,
+            "privacy_verified": self.privacy_verified,
+            "failure_reason": self.failure_reason,
+        }
 
 
-def _head_region(kpts: np.ndarray) -> tuple[int, int, int] | None:
-    """(cx, cy, radius) of the head from pose keypoints, or None."""
-    pts = [(kpts[i][0], kpts[i][1]) for i in HEAD_KPTS if kpts[i][2] > KPT_CONF]
-    if not pts:
+class PrivacyVerificationError(ValueError):
+    pass
+
+
+def _head_region(
+    keypoints: np.ndarray,
+    confidence: float = DEFAULT_KPT_CONFIDENCE,
+    minimum_radius: int = MIN_HEAD_RADIUS,
+) -> tuple[int, int, int] | None:
+    points = [
+        (keypoints[index][0], keypoints[index][1])
+        for index in HEAD_KPTS
+        if keypoints[index][2] >= confidence
+    ]
+    if not points:
         return None
-    xs, ys = zip(*pts)
-    cx, cy = int(np.mean(xs)), int(np.mean(ys))
+    xs, ys = zip(*points)
+    center_x = int(np.mean(xs))
+    center_y = int(np.mean(ys))
+    size = 0.0
+    if keypoints[3][2] >= confidence and keypoints[4][2] >= confidence:
+        size = float(np.hypot(
+            keypoints[3][0] - keypoints[4][0],
+            keypoints[3][1] - keypoints[4][1],
+        ))
+    elif keypoints[1][2] >= confidence and keypoints[2][2] >= confidence:
+        size = 1.8 * float(np.hypot(
+            keypoints[1][0] - keypoints[2][0],
+            keypoints[1][1] - keypoints[2][1],
+        ))
+    radius = int(max(minimum_radius, size * 1.36))
+    return center_x, center_y, radius
 
-    # size from ear-to-ear, else eye-to-eye, else fixed minimum
-    size = None
-    if kpts[3][2] > KPT_CONF and kpts[4][2] > KPT_CONF:
-        size = np.hypot(kpts[3][0] - kpts[4][0], kpts[3][1] - kpts[4][1])
-    elif kpts[1][2] > KPT_CONF and kpts[2][2] > KPT_CONF:
-        size = np.hypot(kpts[1][0] - kpts[2][0], kpts[1][1] - kpts[2][1]) * 1.8
-    radius = int(max(MIN_HEAD_RADIUS, (size or 0) * ELLIPSE_SCALE / 2 * 1.6))
-    return cx, cy, radius
 
-
-def _blur_ellipse(frame: np.ndarray, cx: int, cy: int, radius: int) -> None:
-    h, w = frame.shape[:2]
-    x0, y0 = max(0, cx - radius), max(0, cy - radius)
-    x1, y1 = min(w, cx + radius), min(h, cy + radius)
+def _blur_ellipse(frame: np.ndarray, center_x: int, center_y: int, radius: int) -> None:
+    height, width = frame.shape[:2]
+    blur_radius = max(radius, int(np.ceil(radius * 1.6)))
+    vertical_radius = int(np.ceil(blur_radius * 1.2))
+    x0, y0 = max(0, center_x - blur_radius), max(0, center_y - vertical_radius)
+    x1, y1 = min(width, center_x + blur_radius), min(height, center_y + vertical_radius)
     if x1 <= x0 or y1 <= y0:
         return
-    roi = frame[y0:y1, x0:x1]
-    k = max(7, (radius // 2) * 2 + 1)
-    blurred = cv2.GaussianBlur(roi, (k, k), 0)
-    mask = np.zeros(roi.shape[:2], dtype=np.uint8)
-    cv2.ellipse(mask, (cx - x0, cy - y0), (radius, int(radius * 1.2)),
-                0, 0, 360, 255, -1)
-    roi[mask > 0] = blurred[mask > 0]
+    region = frame[y0:y1, x0:x1]
+    maximum_kernel = min(region.shape[:2])
+    if maximum_kernel % 2 == 0:
+        maximum_kernel -= 1
+    kernel = min(maximum_kernel, max(15, blur_radius * 2 - 1))
+    if kernel < 3:
+        return
+    blurred = cv2.GaussianBlur(region, (kernel, kernel), 0)
+    blurred = cv2.GaussianBlur(blurred, (kernel, kernel), 0)
+    mask = np.zeros(region.shape[:2], dtype=np.uint8)
+    cv2.ellipse(
+        mask,
+        (center_x - x0, center_y - y0),
+        (blur_radius, vertical_radius),
+        0,
+        0,
+        360,
+        255,
+        -1,
+    )
+    mean_color = np.rint(np.mean(region[mask > 0], axis=0)).astype(np.uint8)
+    region[mask > 0] = blurred[mask > 0]
+    core_mask = np.zeros(region.shape[:2], dtype=np.uint8)
+    cv2.ellipse(
+        core_mask,
+        (center_x - x0, center_y - y0),
+        (
+            max(1, int(blur_radius * 0.80)),
+            max(1, int(vertical_radius * 0.80)),
+        ),
+        0,
+        0,
+        360,
+        255,
+        -1,
+    )
+    region[core_mask > 0] = mean_color
 
 
-def _load_yunet(input_size=(320, 320)):
-    if not YUNET_PATH.exists():
+def _region_is_obscured(
+    frame: np.ndarray, center_x: int, center_y: int, radius: int
+) -> bool:
+    height, width = frame.shape[:2]
+    half_width = max(4, int(radius * 0.55))
+    half_height = max(4, int(radius * 0.65))
+    x0, y0 = max(0, center_x - half_width), max(0, center_y - half_height)
+    x1, y1 = min(width, center_x + half_width), min(height, center_y + half_height)
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return False
+    gray = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    return sharpness <= 20.0
+
+
+def _load_yunet(score_threshold: float = 0.60):
+    if not YUNET_PATH.is_file():
         return None
-    return cv2.FaceDetectorYN.create(str(YUNET_PATH), "", input_size,
-                                     score_threshold=0.6)
+    return cv2.FaceDetectorYN.create(
+        str(YUNET_PATH),
+        "",
+        (320, 320),
+        score_threshold=float(score_threshold),
+    )
 
 
 def _yunet_faces(detector, frame: np.ndarray) -> list[tuple[int, int, int]]:
-    """Return (cx, cy, radius) for each detected face."""
-    h, w = frame.shape[:2]
-    detector.setInputSize((w, h))
+    height, width = frame.shape[:2]
+    detector.setInputSize((width, height))
     _, faces = detector.detect(frame)
-    out = []
-    if faces is not None:
-        for f in faces:
-            x, y, fw, fh = f[:4]
-            out.append((int(x + fw / 2), int(y + fh / 2),
-                        int(max(fw, fh) * 0.75)))
-    return out
+    if faces is None:
+        return []
+    regions = []
+    for x, y, face_width, face_height, *_rest in faces.tolist():
+        face_extent = max(face_width, face_height)
+        radius_scale = 0.85 if face_extent < height * 0.10 else 0.35
+        regions.append(
+            (
+                int(x + face_width / 2),
+                int(y + face_height / 2),
+                int(max(MIN_HEAD_RADIUS, face_extent * radius_scale)),
+            )
+        )
+    return regions
 
 
-def pick_person_frame(frame: np.ndarray, boxes: list[tuple[int, list[float]]],
-                      title: str = "Select your athlete") -> int | None:
-    """Show numbered person boxes; return chosen track id or None (blur all).
+def _pose_heads(
+    model,
+    frame: np.ndarray,
+    device: str,
+    score_threshold: float,
+) -> list[tuple[int, int, int]]:
+    results = model.predict(
+        frame,
+        verbose=False,
+        device=device,
+        conf=float(score_threshold),
+    )
+    if not results:
+        return []
+    keypoints = getattr(results[0], "keypoints", None)
+    if keypoints is None:
+        return []
+    raw = keypoints.data.cpu().numpy()
+    minimum_radius = max(MIN_HEAD_RADIUS, int(round(frame.shape[0] / 100.0)))
+    return [
+        region
+        for points in raw
+        if (
+            region := _head_region(
+                points,
+                score_threshold,
+                minimum_radius=minimum_radius,
+            )
+        ) is not None
+    ]
 
-    Keys: 1-9 select the numbered person, 0 or ESC = athlete not visible.
-    """
-    disp = frame.copy()
-    for n, (tid, box) in enumerate(boxes, 1):
-        x0, y0, x1, y1 = map(int, box)
-        cv2.rectangle(disp, (x0, y0), (x1, y1), (0, 255, 0), 2)
-        cv2.putText(disp, str(n), (x0 + 4, y0 + 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)
-    cv2.putText(disp, "Press number of YOUR athlete, 0/ESC = not visible",
-                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2)
 
-    scale = min(1.0, 1400 / disp.shape[1])
-    if scale < 1.0:
-        disp = cv2.resize(disp, None, fx=scale, fy=scale)
-    cv2.imshow(title, disp)
+def _deduplicate(
+    regions: list[tuple[int, int, int]],
+) -> list[tuple[int, int, int]]:
+    selected: list[tuple[int, int, int]] = []
+    for candidate in sorted(regions, key=lambda item: item[2], reverse=True):
+        x, y, radius = candidate
+        if any(
+            np.hypot(x - other_x, y - other_y) <= 0.5 * max(radius, other_radius)
+            for other_x, other_y, other_radius in selected
+        ):
+            continue
+        selected.append(candidate)
+    return selected
+
+
+def _detect_candidates(
+    model,
+    yunet,
+    frame: np.ndarray,
+    device: str,
+    score_threshold: float,
+) -> list[tuple[int, int, int]]:
+    return _deduplicate(
+        _pose_heads(model, frame, device, score_threshold)
+        + _yunet_faces(yunet, frame)
+    )
+
+
+def _default_writer(path: Path, fps: float, width: int, height: int):
+    return cv2.VideoWriter(
+        str(path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (width, height),
+    )
+
+
+def _capture_details(capture) -> tuple[float, int, int, int]:
+    return (
+        float(capture.get(cv2.CAP_PROP_FPS) or 30.0),
+        int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        int(capture.get(cv2.CAP_PROP_FRAME_COUNT)),
+    )
+
+
+def blur_all_faces(
+    model,
+    input_path: Path,
+    output_path: Path,
+    device: str,
+    *,
+    score_threshold: float = 0.60,
+    only_unobscured: bool = False,
+    capture_factory: Callable[[str], Any] = cv2.VideoCapture,
+    writer_factory: Callable[..., Any] = _default_writer,
+    yunet=None,
+    candidate_detector: Callable[..., list[tuple[int, int, int]]] = _detect_candidates,
+) -> BlurReport:
+    """Blur every candidate from both detectors; no person is exempt."""
+    if model is None:
+        return BlurReport(failure_reason="YOLO detektor nije dostupan")
+    yunet = yunet if yunet is not None else _load_yunet(score_threshold)
+    if yunet is None:
+        return BlurReport(failure_reason="YuNet detektor nije dostupan")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    capture = capture_factory(str(input_path))
+    if hasattr(capture, "isOpened") and not capture.isOpened():
+        return BlurReport(failure_reason="ulazni video ne može da se dekodira")
+    fps, width, height, expected_frames = _capture_details(capture)
+    if width <= 0 or height <= 0:
+        capture.release()
+        return BlurReport(failure_reason="ulazni video nema validne dimenzije")
+    writer = writer_factory(output_path, fps, width, height)
+    if hasattr(writer, "isOpened") and not writer.isOpened():
+        capture.release()
+        return BlurReport(failure_reason="izlazni video ne može da se otvori")
+
+    total_frames = 0
+    candidates = 0
+    failure_reason = None
     try:
         while True:
-            key = cv2.waitKey(0) & 0xFF
-            if key in (27, ord("0")):
-                return None
-            n = key - ord("0")
-            if 1 <= n <= len(boxes):
-                return boxes[n - 1][0]
-    finally:
-        cv2.destroyWindow(title)
-        cv2.waitKey(1)
-
-
-def first_frame_boxes(model, video_path: Path, device: str = "mps"):
-    """Run tracking on frame 0; return (frame, [(track_id, xyxy), ...])."""
-    cap = cv2.VideoCapture(str(video_path))
-    ok, frame = cap.read()
-    cap.release()
-    if not ok:
-        raise ValueError(f"cannot read first frame of {video_path}")
-
-    results = model.track(frame, persist=False, verbose=False, device=device)
-    boxes = []
-    r = results[0]
-    if r.boxes is not None and r.boxes.id is not None:
-        for tid, xyxy in zip(r.boxes.id.tolist(), r.boxes.xyxy.tolist()):
-            boxes.append((int(tid), xyxy))
-    return frame, boxes
-
-
-def blur_clip(model, in_path: Path, out_path: Path,
-              son_track_id: int | None, device: str = "mps") -> BlurReport:
-    """Blur all heads/faces except the tracked athlete's.
-
-    `model` is a ultralytics YOLO pose model; tracking state is reset per clip.
-    son_track_id None => blur everyone.
-    """
-    if hasattr(model, "predictor") and model.predictor is not None:
-        # reset tracker state so track ids match first_frame_boxes' run
-        if getattr(model.predictor, "trackers", None):
-            for t in model.predictor.trackers:
-                t.reset()
-
-    yunet = _load_yunet()
-    cap = cv2.VideoCapture(str(in_path))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    out = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"),
-                          fps, (w, h))
-
-    report = BlurReport()
-    lost_since: int | None = None
-    frame_idx = 0
-
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-
-        results = model.track(frame, persist=True, verbose=False, device=device)
-        r = results[0]
-
-        son_head: tuple[int, int, int] | None = None
-        others: list[tuple[int, int, int]] = []
-
-        if r.keypoints is not None and r.boxes is not None:
-            ids = (r.boxes.id.tolist() if r.boxes.id is not None
-                   else [None] * len(r.boxes))
-            for tid, kpts in zip(ids, r.keypoints.data.cpu().numpy()):
-                head = _head_region(kpts)
-                if head is None:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            regions = candidate_detector(
+                model, yunet, frame, device, float(score_threshold)
+            )
+            candidates += len(regions)
+            for center_x, center_y, radius in regions:
+                if only_unobscured and _region_is_obscured(
+                    frame, center_x, center_y, radius
+                ):
                     continue
-                if son_track_id is not None and tid == son_track_id:
-                    son_head = head
-                else:
-                    others.append(head)
-
-        for cx, cy, rad in others:
-            _blur_ellipse(frame, cx, cy, rad)
-
-        # Safety net: any YuNet face outside the son's protected region
-        if yunet is not None:
-            for cx, cy, rad in _yunet_faces(yunet, frame):
-                if son_head is not None:
-                    sx, sy, sr = son_head
-                    if np.hypot(cx - sx, cy - sy) < max(sr, rad):
-                        continue  # it's the son's face
-                _blur_ellipse(frame, cx, cy, rad)
-
-        # Privacy-safe failure: son requested but not found -> blur his
-        # likely region too is impossible (unknown), so nothing to exempt;
-        # just record the gap for the report.
-        if son_track_id is not None:
-            if son_head is not None:
-                report.son_visible_frames += 1
-                if lost_since is not None:
-                    report.son_lost_ranges.append((lost_since, frame_idx - 1))
-                    lost_since = None
-            elif lost_since is None:
-                lost_since = frame_idx
-
-        out.write(frame)
-        frame_idx += 1
-
-    if lost_since is not None:
-        report.son_lost_ranges.append((lost_since, frame_idx - 1))
-    report.total_frames = frame_idx
-
-    cap.release()
-    out.release()
-    return report
+                _blur_ellipse(frame, center_x, center_y, radius)
+            writer.write(frame)
+            total_frames += 1
+    except Exception as exc:
+        failure_reason = f"detektor nije obradio svaki kadar: {exc}"
+    finally:
+        capture.release()
+        writer.release()
+    if failure_reason is None and (
+        total_frames == 0
+        or (expected_frames > 0 and total_frames != expected_frames)
+    ):
+        failure_reason = "video nije dekodiran do kraja"
+    return BlurReport(
+        total_frames=total_frames,
+        first_pass_candidates=candidates,
+        privacy_verified=False,
+        failure_reason=failure_reason,
+    )
 
 
-if __name__ == "__main__":
-    import argparse
-    from ultralytics import YOLO
+def verify_blurred_clip(
+    model,
+    input_path: Path,
+    device: str,
+    *,
+    score_threshold: float = 0.30,
+    capture_factory: Callable[[str], Any] = cv2.VideoCapture,
+    yunet=None,
+    candidate_detector: Callable[..., list[tuple[int, int, int]]] = _detect_candidates,
+) -> BlurReport:
+    """Verify that both detectors process every frame and find no candidate."""
+    if model is None:
+        return BlurReport(failure_reason="YOLO detektor nije dostupan")
+    yunet = yunet if yunet is not None else _load_yunet(score_threshold)
+    if yunet is None:
+        return BlurReport(failure_reason="YuNet detektor nije dostupan")
+    capture = capture_factory(str(input_path))
+    if hasattr(capture, "isOpened") and not capture.isOpened():
+        return BlurReport(failure_reason="video ne može da se dekodira")
+    _, _, _, expected_frames = _capture_details(capture)
+    total_frames = 0
+    candidates = 0
+    failure_reason = None
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            regions = candidate_detector(
+                model, yunet, frame, device, float(score_threshold)
+            )
+            candidates += sum(
+                not _region_is_obscured(frame, center_x, center_y, radius)
+                for center_x, center_y, radius in regions
+            )
+            total_frames += 1
+    except Exception as exc:
+        failure_reason = f"detektor nije obradio svaki kadar: {exc}"
+    finally:
+        capture.release()
+    if failure_reason is None and (
+        total_frames == 0
+        or (expected_frames > 0 and total_frames != expected_frames)
+    ):
+        failure_reason = "video nije dekodiran do kraja"
+    verified = failure_reason is None and candidates == 0
+    return BlurReport(
+        total_frames=total_frames,
+        second_pass_candidates=candidates,
+        privacy_verified=verified,
+        failure_reason=failure_reason,
+    )
 
-    p = argparse.ArgumentParser(description="Blur all faces except one athlete")
-    p.add_argument("--in", dest="inp", required=True, type=Path)
-    p.add_argument("--out", required=True, type=Path)
-    p.add_argument("--model", default="yolo11x-pose.pt")
-    p.add_argument("--device", default="mps")
-    p.add_argument("--blur-all", action="store_true",
-                   help="skip the picker; blur everyone")
-    args = p.parse_args()
 
-    model = YOLO(args.model)
-    son_id = None
-    if not args.blur_all:
-        frame, boxes = first_frame_boxes(model, args.inp, args.device)
-        if boxes:
-            son_id = pick_person_frame(frame, boxes)
+def verify_blurred_against_source(
+    model,
+    source_path: Path,
+    private_path: Path,
+    device: str,
+    *,
+    score_threshold: float = 0.30,
+    source_capture_factory: Callable[[str], Any] = cv2.VideoCapture,
+    private_capture_factory: Callable[[str], Any] = cv2.VideoCapture,
+    yunet=None,
+    candidate_detector: Callable[..., list[tuple[int, int, int]]] = _detect_candidates,
+) -> BlurReport:
+    """Require every low-threshold source candidate to be obscured in output."""
+    if model is None:
+        return BlurReport(failure_reason="YOLO detektor nije dostupan")
+    yunet = yunet if yunet is not None else _load_yunet(score_threshold)
+    if yunet is None:
+        return BlurReport(failure_reason="YuNet detektor nije dostupan")
+    source = source_capture_factory(str(source_path))
+    private = private_capture_factory(str(private_path))
+    if (
+        hasattr(source, "isOpened")
+        and not source.isOpened()
+        or hasattr(private, "isOpened")
+        and not private.isOpened()
+    ):
+        source.release()
+        private.release()
+        return BlurReport(failure_reason="izvorni ili privatni video ne može da se dekodira")
+    _, source_width, source_height, source_expected = _capture_details(source)
+    _, private_width, private_height, private_expected = _capture_details(private)
+    if (
+        source_width <= 0
+        or source_height <= 0
+        or (source_width, source_height) != (private_width, private_height)
+    ):
+        source.release()
+        private.release()
+        return BlurReport(failure_reason="izvorni i privatni video nemaju iste dimenzije")
 
-    rep = blur_clip(model, args.inp, args.out, son_id, args.device)
-    print(f"{rep.total_frames} frames; athlete visible "
-          f"{rep.son_visible_frames}; lost ranges: {rep.son_lost_ranges}")
+    total_frames = 0
+    candidates = 0
+    failure_reason = None
+    try:
+        while True:
+            source_ok, source_frame = source.read()
+            private_ok, private_frame = private.read()
+            if not source_ok or not private_ok:
+                if source_ok != private_ok:
+                    failure_reason = "izvorni i privatni video nemaju isti broj kadrova"
+                break
+            regions = candidate_detector(
+                model,
+                yunet,
+                source_frame,
+                device,
+                float(score_threshold),
+            )
+            candidates += sum(
+                not _region_is_obscured(private_frame, center_x, center_y, radius)
+                for center_x, center_y, radius in regions
+            )
+            total_frames += 1
+    except Exception as exc:
+        failure_reason = f"detektor nije uporedio svaki kadar: {exc}"
+    finally:
+        source.release()
+        private.release()
+    if failure_reason is None and (
+        total_frames == 0
+        or (source_expected > 0 and total_frames != source_expected)
+        or (private_expected > 0 and total_frames != private_expected)
+    ):
+        failure_reason = "izvorni ili privatni video nije dekodiran do kraja"
+    verified = failure_reason is None and candidates == 0
+    return BlurReport(
+        total_frames=total_frames,
+        second_pass_candidates=candidates,
+        privacy_verified=verified,
+        failure_reason=failure_reason,
+    )
+
+
+def blur_from_reference(
+    model,
+    source_path: Path,
+    private_input_path: Path,
+    output_path: Path,
+    device: str,
+    *,
+    score_threshold: float = 0.30,
+    source_capture_factory: Callable[[str], Any] = cv2.VideoCapture,
+    private_capture_factory: Callable[[str], Any] = cv2.VideoCapture,
+    writer_factory: Callable[..., Any] = _default_writer,
+    yunet=None,
+    candidate_detector: Callable[..., list[tuple[int, int, int]]] = _detect_candidates,
+) -> BlurReport:
+    """Repair output only at low-threshold regions detected in the source."""
+    if model is None:
+        return BlurReport(failure_reason="YOLO detektor nije dostupan")
+    yunet = yunet if yunet is not None else _load_yunet(score_threshold)
+    if yunet is None:
+        return BlurReport(failure_reason="YuNet detektor nije dostupan")
+    source = source_capture_factory(str(source_path))
+    private = private_capture_factory(str(private_input_path))
+    if (
+        hasattr(source, "isOpened")
+        and not source.isOpened()
+        or hasattr(private, "isOpened")
+        and not private.isOpened()
+    ):
+        source.release()
+        private.release()
+        return BlurReport(failure_reason="izvorni ili privatni video ne može da se dekodira")
+    fps, width, height, private_expected = _capture_details(private)
+    _, source_width, source_height, source_expected = _capture_details(source)
+    if width <= 0 or height <= 0 or (width, height) != (source_width, source_height):
+        source.release()
+        private.release()
+        return BlurReport(failure_reason="izvorni i privatni video nemaju iste dimenzije")
+    writer = writer_factory(Path(output_path), fps, width, height)
+    if hasattr(writer, "isOpened") and not writer.isOpened():
+        source.release()
+        private.release()
+        return BlurReport(failure_reason="repair video ne može da se otvori")
+
+    total_frames = 0
+    candidates = 0
+    failure_reason = None
+    try:
+        while True:
+            source_ok, source_frame = source.read()
+            private_ok, private_frame = private.read()
+            if not source_ok or not private_ok:
+                if source_ok != private_ok:
+                    failure_reason = "izvorni i privatni video nemaju isti broj kadrova"
+                break
+            regions = candidate_detector(
+                model,
+                yunet,
+                source_frame,
+                device,
+                float(score_threshold),
+            )
+            candidates += len(regions)
+            for center_x, center_y, radius in regions:
+                if not _region_is_obscured(
+                    private_frame, center_x, center_y, radius
+                ):
+                    _blur_ellipse(private_frame, center_x, center_y, radius)
+            writer.write(private_frame)
+            total_frames += 1
+    except Exception as exc:
+        failure_reason = f"detektor nije popravio svaki kadar: {exc}"
+    finally:
+        source.release()
+        private.release()
+        writer.release()
+    if failure_reason is None and (
+        total_frames == 0
+        or (source_expected > 0 and total_frames != source_expected)
+        or (private_expected > 0 and total_frames != private_expected)
+    ):
+        failure_reason = "repair video nije dekodiran do kraja"
+    return BlurReport(
+        total_frames=total_frames,
+        first_pass_candidates=candidates,
+        privacy_verified=False,
+        failure_reason=failure_reason,
+    )
+
+
+def _mux_original_audio(video_path: Path, audio_source: Path, output_path: Path) -> Path:
+    command = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(audio_source),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a?",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    subprocess.run(command, check=True, capture_output=True)
+    return output_path
+
+
+def privatize_media(
+    model,
+    raw_path: Path,
+    output_path: Path,
+    device: str,
+    *,
+    blur_fn: Callable[..., BlurReport] = blur_all_faces,
+    repair_fn: Callable[..., BlurReport] = blur_from_reference,
+    verify_fn: Callable[..., BlurReport] = verify_blurred_against_source,
+    audio_muxer: Callable[[Path, Path, Path], Path] = _mux_original_audio,
+) -> BlurReport:
+    """Atomically publish media only after two-detector verification succeeds."""
+    raw_path = Path(raw_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex
+    first = output_path.with_name(f".{output_path.stem}.{token}.blur1.mp4")
+    muxed = output_path.with_name(f".{output_path.stem}.{token}.private.mp4")
+    repairs: list[Path] = []
+    try:
+        first_report = blur_fn(
+            model, raw_path, first, device, score_threshold=0.30
+        )
+        if first_report.failure_reason is not None or not first.is_file():
+            raise PrivacyVerificationError(
+                first_report.failure_reason or "prvi blur prolaz nije napravio video"
+            )
+        residual = verify_fn(
+            model, raw_path, first, device, score_threshold=0.30
+        )
+        candidate = first
+        repaired_candidates = 0
+        if residual.failure_reason is not None:
+            raise PrivacyVerificationError(residual.failure_reason)
+        for repair_index in range(1, 3):
+            if residual.second_pass_candidates == 0:
+                break
+            repaired_candidates += residual.second_pass_candidates
+            repaired = output_path.with_name(
+                f".{output_path.stem}.{token}.blur{repair_index + 1}.mp4"
+            )
+            repairs.append(repaired)
+            repair_report = repair_fn(
+                model,
+                raw_path,
+                candidate,
+                repaired,
+                device,
+                score_threshold=0.30,
+            )
+            if repair_report.failure_reason is not None or not repaired.is_file():
+                raise PrivacyVerificationError(
+                    repair_report.failure_reason or "drugi blur prolaz nije napravio video"
+                )
+            candidate = repaired
+            residual = verify_fn(
+                model, raw_path, candidate, device, score_threshold=0.30
+            )
+            if residual.failure_reason is not None:
+                raise PrivacyVerificationError(residual.failure_reason)
+        if residual.second_pass_candidates:
+            raise PrivacyVerificationError(
+                f"posle dodatnog zamagljivanja ostalo je "
+                f"{residual.second_pass_candidates} oštrih kandidata"
+            )
+        audio_muxer(candidate, raw_path, muxed)
+        if not muxed.is_file() or muxed.stat().st_size <= 0:
+            raise PrivacyVerificationError("privatni video nije napravljen")
+        final = verify_fn(
+            model, raw_path, muxed, device, score_threshold=0.30
+        )
+        if not final.privacy_verified:
+            raise PrivacyVerificationError(
+                final.failure_reason
+                or f"poslednja provera je našla {final.second_pass_candidates} kandidata"
+            )
+        os.replace(muxed, output_path)
+        return BlurReport(
+            total_frames=final.total_frames,
+            first_pass_candidates=first_report.first_pass_candidates,
+            second_pass_candidates=repaired_candidates,
+            privacy_verified=True,
+            failure_reason=None,
+        )
+    finally:
+        for temporary in (first, *repairs, muxed):
+            temporary.unlink(missing_ok=True)
+
+
+def build_privacy_processor(
+    model_path: Path | str = "yolo11x-pose.pt",
+    device: str = "mps",
+) -> Callable[[Path, Path], BlurReport]:
+    """Create a lazy, reusable processor so one YOLO model serves all exports."""
+    model = None
+
+    def process(raw_path: Path, output_path: Path) -> BlurReport:
+        nonlocal model
+        if model is None:
+            from ultralytics import YOLO
+
+            model = YOLO(str(model_path))
+        return privatize_media(model, raw_path, output_path, device)
+
+    return process
+
+
+__all__ = [
+    "BlurReport",
+    "PrivacyVerificationError",
+    "blur_all_faces",
+    "blur_from_reference",
+    "build_privacy_processor",
+    "privatize_media",
+    "verify_blurred_against_source",
+    "verify_blurred_clip",
+]
