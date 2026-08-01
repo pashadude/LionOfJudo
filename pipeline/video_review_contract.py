@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import math
-from typing import Any
+from typing import Any, Mapping
 
 
 def _finite_float(value: object, field_name: str) -> float:
@@ -173,5 +173,142 @@ def validate_review_session(
     for event in session.events:
         if event.prijavljen_povredni_dogadjaj and not event.iskljuceno_iz_statistike:
             raise ValueError("injury events must be excluded from statistics")
-        if not event.iskljuceno_iz_statistike and event.sony_start_s < session.injury_cutoff_s < event.sony_end_s:
-            raise ValueError("normal event must not cross the injury cutoff")
+        if not event.iskljuceno_iz_statistike and event.sony_end_s > session.injury_cutoff_s:
+            raise ValueError("normal event must not end after the injury cutoff")
+
+
+def validate_review_payload(payload: Mapping[str, Any]) -> None:
+    """Validate the final persisted review payload across derived collections."""
+    if not isinstance(payload, Mapping):
+        raise TypeError("review payload must be a JSON object")
+    raw_anchors = payload.get("anchors")
+    raw_events = payload.get("events")
+    if not isinstance(raw_anchors, list) or len(raw_anchors) != 2:
+        raise ValueError("review payload requires exactly two anchors")
+    if not isinstance(raw_events, list):
+        raise ValueError("review payload events must be a JSON list")
+    anchors = [AnchorPair.from_dict(anchor) for anchor in raw_anchors]
+    if not all(anchor.is_confirmed for anchor in anchors):
+        raise ValueError("review payload anchors must be confirmed triple taps")
+    ordered_anchors = sorted(anchors, key=lambda anchor: anchor.iphone_s)
+    iphone_delta = ordered_anchors[1].iphone_s - ordered_anchors[0].iphone_s
+    sony_delta = ordered_anchors[1].sony_s - ordered_anchors[0].sony_s
+    if iphone_delta <= 0.0 or sony_delta <= 0.0:
+        raise ValueError("review payload anchors must advance in both videos")
+    expected_slope = sony_delta / iphone_delta
+    expected_intercept = ordered_anchors[0].sony_s - expected_slope * ordered_anchors[0].iphone_s
+
+    raw_map = payload.get("time_map")
+    if not isinstance(raw_map, Mapping):
+        raise ValueError("review payload requires a time_map")
+    slope = _finite_float(raw_map.get("slope"), "time_map.slope")
+    intercept = _finite_float(raw_map.get("intercept"), "time_map.intercept")
+    if slope <= 0.0:
+        raise ValueError("time_map slope must be positive")
+    if not math.isclose(slope, expected_slope, rel_tol=0.0, abs_tol=1e-9):
+        raise ValueError("time_map slope does not match confirmed anchors")
+    if not math.isclose(intercept, expected_intercept, rel_tol=0.0, abs_tol=1e-9):
+        raise ValueError("time_map intercept does not match confirmed anchors")
+
+    sony_duration = _finite_float(payload.get("sony_duration_s"), "sony_duration_s")
+    iphone_duration = _finite_float(payload.get("iphone_duration_s"), "iphone_duration_s")
+    if sony_duration <= 0.0 or iphone_duration <= 0.0:
+        raise ValueError("source durations must be positive")
+    events = [ReviewEvent.from_dict(event) for event in raw_events]
+    session = ReviewSession(
+        session_id=payload.get("session_id", "session"),
+        sony_video=payload.get("sony_video", ""),
+        iphone_video=payload.get("iphone_video", ""),
+        anchors=anchors,
+        injury_cutoff_s=payload.get("injury_cutoff_s"),
+        events=events,
+    )
+    validate_review_session(session, sony_duration, iphone_duration)
+    if session.injury_cutoff_s > sony_duration:
+        raise ValueError("injury cutoff must be within the Sony source")
+
+    event_ids = [event.event_id for event in events]
+    if len(event_ids) != len(set(event_ids)):
+        raise ValueError("event IDs must be unique")
+    first_anchor = min(anchor.sony_s for anchor in anchors)
+    normal_events = sorted(session.normal_events(), key=lambda event: event.sony_start_s)
+    for event in events:
+        if event.sony_start_s < 0.0 or event.sony_end_s > sony_duration:
+            raise ValueError("event must be within the Sony source")
+        if not event.iskljuceno_iz_statistike and event.sony_start_s < first_anchor:
+            raise ValueError("normal event must not start before the first anchor")
+    for previous, current in zip(normal_events, normal_events[1:]):
+        if current.sony_start_s < previous.sony_end_s:
+            raise ValueError("normal events must not overlap")
+
+    metric_keys = (
+        "brzina_ulaska_norm",
+        "rotacija_trupa_2d_dps",
+        "promena_visine_kukova_norm",
+        "sirina_stava_norm",
+        "vreme_oporavka_s",
+        "intenzitet_pokreta_0_100",
+    )
+    for raw_event in raw_events:
+        if not isinstance(raw_event, Mapping):
+            raise TypeError("events must contain JSON objects")
+        for key in metric_keys:
+            value = raw_event.get(key)
+            if value is not None:
+                _finite_float(value, f"event.{key}")
+        intensity = raw_event.get("intenzitet_pokreta_0_100")
+        if intensity is not None and not 0.0 <= float(intensity) <= 100.0:
+            raise ValueError("event intensity must be within 0..100")
+        iphone_start = raw_event.get("iphone_start_s")
+        iphone_end = raw_event.get("iphone_end_s")
+        if (iphone_start is None) != (iphone_end is None):
+            raise ValueError("event iPhone bounds must be present together")
+        if iphone_start is not None:
+            iphone_start_value = _finite_float(iphone_start, "iphone_start_s")
+            iphone_end_value = _finite_float(iphone_end, "iphone_end_s")
+            if not 0.0 <= iphone_start_value < iphone_end_value <= iphone_duration:
+                raise ValueError("event must be within the iPhone source")
+            expected_start = (float(raw_event["sony_start_s"]) - intercept) / slope
+            expected_end = (float(raw_event["sony_end_s"]) - intercept) / slope
+            if not math.isclose(iphone_start_value, expected_start, rel_tol=0.0, abs_tol=1e-6):
+                raise ValueError("event iPhone start does not match the inverse time map")
+            if not math.isclose(iphone_end_value, expected_end, rel_tol=0.0, abs_tol=1e-6):
+                raise ValueError("event iPhone end does not match the inverse time map")
+
+    frame_metrics = payload.get("frame_metrics", [])
+    if not isinstance(frame_metrics, list):
+        raise ValueError("frame_metrics must be a JSON list")
+    previous_timestamp = -math.inf
+    for frame in frame_metrics:
+        if not isinstance(frame, Mapping):
+            raise TypeError("frame_metrics must contain JSON objects")
+        timestamp = _finite_float(frame.get("timestamp_s"), "frame.timestamp_s")
+        if timestamp < previous_timestamp:
+            raise ValueError("frame metric timestamps must be ordered")
+        previous_timestamp = timestamp
+        for key in metric_keys:
+            value = frame.get(key)
+            if value is not None:
+                _finite_float(value, f"frame.{key}")
+        intensity = frame.get("intenzitet_pokreta_0_100")
+        if intensity is not None and not 0.0 <= float(intensity) <= 100.0:
+            raise ValueError("frame intensity must be within 0..100")
+
+    event_metrics = payload.get("event_metrics")
+    if event_metrics is not None:
+        if not isinstance(event_metrics, list):
+            raise ValueError("event_metrics must be a JSON list")
+        metric_ids = [
+            event.get("event_id") for event in event_metrics
+            if isinstance(event, Mapping)
+        ]
+        if len(metric_ids) != len(event_metrics) or metric_ids != event_ids:
+            raise ValueError("event_metrics must match active events in order")
+        for event, metrics in zip(raw_events, event_metrics):
+            for key in ("sony_start_s", "sony_end_s", *metric_keys):
+                if event.get(key) != metrics.get(key):
+                    raise ValueError("event_metrics must match active event bounds and metrics")
+
+    orphaned = payload.get("orphaned_annotations", [])
+    if not isinstance(orphaned, list) or not all(isinstance(item, Mapping) for item in orphaned):
+        raise ValueError("orphaned_annotations must be a JSON list of objects")

@@ -48,6 +48,7 @@ class CoachServerTests(unittest.TestCase):
                     ],
                     "time_map": {"slope": 1.0, "intercept": -5.0},
                     "injury_cutoff_s": 20.0,
+                    "sync_locked": True,
                     "frame_metrics": [
                         {
                             "timestamp_s": 0.0,
@@ -251,7 +252,7 @@ class CoachServerTests(unittest.TestCase):
             urlopen(request)
         self.assertEqual(raised.exception.code, 400)
 
-    def test_sync_requires_two_confirmed_anchors_and_respects_injury_event(self):
+    def test_imported_session_sync_is_locked_with_serbian_conflict(self):
         server = self.start_server()
         anchors = [
             {
@@ -269,20 +270,52 @@ class CoachServerTests(unittest.TestCase):
                 "triple_tap_count": 3,
             },
         ]
+        before = self.review_path.read_bytes()
+        with self.assertRaises(HTTPError) as raised:
+            self.read_json(
+                server.base_url + "/api/session/sync",
+                method="POST",
+                body=json.dumps({"anchors": anchors, "injury_cutoff_s": 20.0}).encode(),
+            )
+        self.assertEqual(raised.exception.code, 409)
+        error = json.loads(raised.exception.read().decode("utf-8"))["error"]
+        self.assertIn("zaključana", error)
+        self.assertIn("novi uvoz", error)
+        self.assertEqual(self.review_path.read_bytes(), before)
+
+    def test_minimal_preimport_session_can_update_sync(self):
+        review = json.loads(self.review_path.read_text(encoding="utf-8"))
+        review["events"] = []
+        review["event_metrics"] = []
+        review["frame_metrics"] = []
+        review["sync_locked"] = False
+        self.review_path.write_text(json.dumps(review), encoding="utf-8")
+        server = self.start_server()
+        anchors = [
+            {
+                "name": "pocetak",
+                "sony_s": 6.0,
+                "iphone_s": 11.0,
+                "user_confirmed": True,
+                "triple_tap_count": 3,
+            },
+            {
+                "name": "kontrola",
+                "sony_s": 16.0,
+                "iphone_s": 21.0,
+                "user_confirmed": True,
+                "triple_tap_count": 3,
+            },
+        ]
+
         status, synced = self.read_json(
             server.base_url + "/api/session/sync",
             method="POST",
             body=json.dumps({"anchors": anchors, "injury_cutoff_s": 20.0}).encode(),
         )
+
         self.assertEqual(status, 200)
         self.assertAlmostEqual(synced["time_map"]["intercept"], -5.0)
-        with self.assertRaises(HTTPError) as raised:
-            self.read_json(
-                server.base_url + "/api/session/sync",
-                method="POST",
-                body=json.dumps({"anchors": anchors, "injury_cutoff_s": 20.1}).encode(),
-            )
-        self.assertEqual(raised.exception.code, 400)
         unconfirmed = [dict(anchors[0]), dict(anchors[1], triple_tap_count=2)]
         with self.assertRaises(HTTPError) as raised:
             self.read_json(
@@ -365,6 +398,57 @@ class CoachServerTests(unittest.TestCase):
         self.assertIn('$("#note").disabled = disabled;', app_js)
         self.assertIn("setEditorDisabled(true);", app_js)
         self.assertIn("setEditorDisabled(disabled);", app_js)
+
+    def test_ui_uses_canonical_event_series_and_complete_correction_controls(self):
+        static = Path(__file__).parents[1] / "coach_app" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        app_js = (static / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('content="width=device-width, initial-scale=1"', html)
+        expected_series = {
+            "brzina_ulaska_norm": "Brzina ulaska",
+            "rotacija_trupa_2d_dps": "Rotacija trupa (2D)",
+            "promena_visine_kukova_norm": "Visina kukova",
+            "sirina_stava_norm": "Širina stava",
+            "intenzitet_pokreta_0_100": "Intenzitet pokreta",
+        }
+        for key, label in expected_series.items():
+            self.assertIn(f'data-metric="{key}"', html)
+            self.assertIn(label, html)
+        self.assertNotIn('data-metric="vreme_oporavka_s"', html)
+        self.assertNotIn("<h3>Stabilnost</h3>", html)
+        for control_id, label in (
+            ("event-start", "Početak"),
+            ("event-end", "Kraj"),
+            ("update-bounds-button", "Primeni granice"),
+            ("create-event-button", "Novi događaj"),
+            ("split-button", "Podeli"),
+            ("merge-button", "Spoji"),
+            ("delete-button", "Obriši"),
+        ):
+            self.assertIn(f'id="{control_id}"', html)
+            self.assertIn(label, html)
+        self.assertIn("function updateCorrectionControls", app_js)
+        self.assertIn("function updateSyncLock", app_js)
+        self.assertIn("review.sync_locked", app_js)
+        self.assertIn('mutateReview("/api/events", "POST"', app_js)
+        self.assertIn('`/api/events/${encodeURIComponent(event.event_id)}/bounds`', app_js)
+        self.assertIn('`/api/events/${encodeURIComponent(event.event_id)}/split`', app_js)
+        self.assertIn('fetch("/api/events/merge"', app_js)
+        self.assertIn('"DELETE",', app_js)
+        self.assertIn("selectedFrameSamples", app_js)
+
+    def test_mobile_css_has_bounded_single_column_media_and_controls(self):
+        css = (Path(__file__).parents[1] / "coach_app" / "static" / "styles.css").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("overflow-x: hidden", css)
+        self.assertIn(".event-correction", css)
+        self.assertIn("@media (max-width: 620px)", css)
+        self.assertIn(".video-grid, .charts-section, .form-grid", css)
+        self.assertIn("grid-template-columns: 1fr", css)
+        self.assertIn("max-width: 100%", css)
 
 
 if __name__ == "__main__":

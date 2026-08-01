@@ -59,6 +59,15 @@ class VideoReviewCliTests(unittest.TestCase):
         self.assertEqual(mock_import.call_args.kwargs["device"], "mps")
         self.assertEqual(mock_import.call_args.kwargs["event_threshold"], 0.4)
 
+    @patch("tools.video_review.migrate_session")
+    def test_migrate_command_updates_existing_session_without_reimport(self, mock_migrate):
+        mock_migrate.return_value = Path("session/review.json")
+
+        status = main(["migrate", "--session-dir", "session"])
+
+        self.assertEqual(status, 0)
+        mock_migrate.assert_called_once_with(Path("session"))
+
 
 if __name__ == "__main__":
     unittest.main()

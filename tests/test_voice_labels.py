@@ -55,6 +55,22 @@ class VoiceLabelSuggestionTests(unittest.TestCase):
             "Whisper CLI nije dostupan; predlozi tehnika su preskoceni.",
         )
 
+    def test_suggestion_maps_source_evidence_to_canonical_review_fields(self):
+        suggestion = suggest_techniques(
+            [TranscriptWord("o soto gari", 11.5, 12.2)],
+            [("e-1", 11.0, 14.0)],
+        )["e-1"]
+
+        review_fields = suggestion.to_review_fields()
+
+        self.assertEqual(review_fields["predlog_tehnike"], "O-soto-gari")
+        self.assertEqual(review_fields["glasovna_fraza"], "o soto gari")
+        self.assertGreater(review_fields["pouzdanost_glasa"], 0.0)
+        self.assertEqual(review_fields["glasovna_fraza_pocetak_s"], 11.5)
+        self.assertEqual(review_fields["glasovna_fraza_kraj_s"], 12.2)
+        self.assertNotIn("source_phrase", review_fields)
+        self.assertNotIn("confidence", review_fields)
+
     def test_matches_technique_spoken_as_separate_words(self):
         words = [
             TranscriptWord("o", 4.0, 4.1),

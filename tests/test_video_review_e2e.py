@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from coach_app.server import create_server
@@ -104,6 +105,17 @@ class VideoReviewEndToEndTests(unittest.TestCase):
             self.assertTrue(injury["iskljuceno_iz_statistike"])
             self.assertEqual(injury["status"], "povreda")
             self.assertEqual(review["events"][0]["predlog_tehnike"], "O-soto-gari")
+            self.assertEqual(review["events"][0]["glasovna_fraza"], "o soto gari")
+            self.assertGreater(review["events"][0]["pouzdanost_glasa"], 0.0)
+            self.assertEqual(review["events"][0]["glasovna_fraza_pocetak_s"], 11.5)
+            self.assertEqual(review["events"][0]["glasovna_fraza_kraj_s"], 12.2)
+            self.assertEqual(
+                review["transkript"],
+                [{"tekst": "o soto gari", "pocetak_s": 11.5, "kraj_s": 12.2}],
+            )
+            self.assertIsNone(injury["predlog_tehnike"])
+            self.assertIsNone(injury["glasovna_fraza"])
+            self.assertNotIn("glasovna_fraza_pocetak_s", injury)
             self.assertTrue((root / "session" / "media" / "session_side_by_side.mp4").exists())
 
             server = create_server(root / "session", port=0)
@@ -117,10 +129,13 @@ class VideoReviewEndToEndTests(unittest.TestCase):
                 sync_body = json.dumps(
                     {"anchors": [anchor.to_dict() for anchor in anchors], "injury_cutoff_s": 20.0}
                 ).encode("utf-8")
-                with urlopen(Request(server.base_url + "/api/session/sync", data=sync_body, method="POST", headers={"Content-Type": "application/json"})) as response:
-                    self.assertEqual(response.status, 200)
-                    synced = json.loads(response.read().decode("utf-8"))
-                self.assertEqual(synced["time_map"]["intercept"], -20.0)
+                with self.assertRaises(HTTPError) as raised:
+                    urlopen(Request(server.base_url + "/api/session/sync", data=sync_body, method="POST", headers={"Content-Type": "application/json"}))
+                self.assertEqual(raised.exception.code, 409)
+                self.assertIn(
+                    "novi uvoz",
+                    json.loads(raised.exception.read().decode("utf-8"))["error"],
+                )
 
                 annotation_body = json.dumps(
                     {
@@ -144,9 +159,16 @@ class VideoReviewEndToEndTests(unittest.TestCase):
             with (root / "session" / "izvestaj.csv").open(encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows[0]["Potvrđena tehnika"], "O-soto-gari")
+            self.assertEqual(rows[0]["Glasovna fraza"], "o soto gari")
+            self.assertEqual(rows[0]["Početak glasovne fraze (s)"], "11.5")
+            self.assertEqual(rows[0]["Kraj glasovne fraze (s)"], "12.2")
+            self.assertGreater(float(rows[0]["Pouzdanost glasa"]), 0.0)
             self.assertEqual(rows[1]["Isključeno iz statistike"], "da")
             markdown = (root / "session" / "izvestaj.md").read_text(encoding="utf-8")
             self.assertIn("Dobar ulaz.", markdown)
+            self.assertIn("o soto gari", markdown)
+            self.assertIn("11.5", markdown)
+            self.assertIn("12.2", markdown)
             self.assertIn("Normalni događaji u statistici: 1", markdown)
 
 

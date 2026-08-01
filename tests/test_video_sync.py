@@ -3,7 +3,13 @@ from decimal import Decimal
 from pathlib import Path
 import unittest
 
-from pipeline.video_review_contract import AnchorPair, ReviewEvent, ReviewSession, validate_review_session
+from pipeline.video_review_contract import (
+    AnchorPair,
+    ReviewEvent,
+    ReviewSession,
+    validate_review_payload,
+    validate_review_session,
+)
 from pipeline.video_sync import TimeMap, fit_time_map, map_iphone_to_sony
 
 
@@ -105,6 +111,11 @@ class VideoSyncTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_review_session(session, sony_duration_s=200.0, iphone_duration_s=200.0)
 
+    def test_validation_rejects_normal_event_wholly_after_cutoff(self):
+        session = self._session(events=[ReviewEvent("e-1", 130.0, 135.0)])
+        with self.assertRaisesRegex(ValueError, "injury cutoff"):
+            validate_review_session(session, sony_duration_s=200.0, iphone_duration_s=200.0)
+
     def test_validation_rejects_injury_event_missing_exclusion_flag(self):
         event = ReviewEvent("e-1", 120.0, 125.0)
         event.prijavljen_povredni_dogadjaj = True
@@ -112,6 +123,25 @@ class VideoSyncTests(unittest.TestCase):
         session = self._session(events=[event])
         with self.assertRaises(ValueError):
             validate_review_session(session, sony_duration_s=200.0, iphone_duration_s=200.0)
+
+    def test_payload_validation_rejects_out_of_range_intensity_and_stale_event_metrics(self):
+        payload = {
+            **self._session().to_dict(),
+            "sony_duration_s": 200.0,
+            "iphone_duration_s": 200.0,
+            "time_map": {"slope": 1.0, "intercept": -20.0},
+            "frame_metrics": [
+                {"timestamp_s": 100.0, "intenzitet_pokreta_0_100": 101.0}
+            ],
+            "event_metrics": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "0..100"):
+            validate_review_payload(payload)
+
+        payload["frame_metrics"][0]["intenzitet_pokreta_0_100"] = 50.0
+        with self.assertRaisesRegex(ValueError, "event_metrics"):
+            validate_review_payload(payload)
 
     def _session(self, **overrides):
         values = {

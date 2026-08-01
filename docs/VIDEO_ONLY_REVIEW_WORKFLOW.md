@@ -108,7 +108,11 @@ printf '%s\n' '{"anchors":[{"name":"pocetak","sony_s":10.192875,"iphone_s":28.68
   --event-threshold 0.4
 ```
 
-Prvi potvrđeni anker je `10.192875` s na Sony osi, pa normalna pose analiza počinje tamo; pre-ankerski video se ne uključuje. Seed je potvrđen na Sony kadru `10.210` s i importeru se prosleđuju uglovi `(1897,887,2081,1486)` (oblik `x,y,w,h` je `1897,887,184,599`). `--analysis-fps 3.0` obrađuje deterministički svaki izabrani izvorni kadar po strajdu, čuva njegov izvorni timestamp i koristi efektivnu stopu za konačne razlike. To je grubo uzorkovanje video-pokreta; preskočeni kadrovi se ne izmišljaju. U ovom realnom prototipu `--event-threshold 0.4` je eksplicitno snižen da bi se uzorci na gruboj stopi obuhvatili; podrazumevana vrednost bez ove opcije ostaje `0.5`. Lokalna težina mora postojati; importer odbija nepostojeću težinu i ne preuzima model. Import pravi `review.json`, analize, preview fajlove, klipove događaja i `media/session_side_by_side.mp4`. Ne pokreći import preko već anotirane sesije; za novu obradu koristi prazan direktorijum. `force_reimport=True` je dozvoljen samo kada je očuvanje postojeće trenerove beleške namerno provereno.
+Prvi potvrđeni anker je `10.192875` s na Sony osi, pa normalna pose analiza počinje tamo; pre-ankerski video se ne uključuje. Seed je potvrđen na Sony kadru `10.210` s i importeru se prosleđuju uglovi `(1897,887,2081,1486)` (oblik `x,y,w,h` je `1897,887,184,599`). `--analysis-fps 3.0` obrađuje deterministički svaki izabrani izvorni kadar po strajdu, čuva njegov izvorni timestamp i koristi efektivnu stopu za konačne razlike. To je grubo uzorkovanje video-pokreta; preskočeni kadrovi se ne izmišljaju. U ovom realnom prototipu `--event-threshold 0.4` je eksplicitno snižen da bi se uzorci na gruboj stopi obuhvatili; podrazumevana vrednost bez ove opcije ostaje `0.5`. Lokalna težina mora postojati; importer odbija nepostojeću težinu i ne preuzima model. Import pravi `review.json`, analize, preview fajlove, klipove događaja i `media/session_side_by_side.mp4`.
+
+Uvezena sesija sa izvedenim klipovima, metrikama ili događajima ima `sync_locked: true`. Ankeri, afina mapa i presek povrede tada se ne menjaju u postojećoj sesiji; HTTP zahtev vraća `409` i traži novi uvoz. Minimalna sesija pre uvoza može menjati sinhronizaciju samo dok nema zavisne izvedene artefakte. Za bezbednu nadogradnju stare sesije bez ponovne YOLO obrade koristi `tools/video_review.py migrate --session-dir <sesija>`; migracija računa kanonske nizove iz postojećih `frame_metrics` i ne dodiruje izvore.
+
+Ne pokreći import preko već anotirane sesije; za novu obradu koristi prazan direktorijum. `force_reimport=True` je dozvoljen samo kada je očuvanje postojeće trenerove beleške namerno provereno. Beleške se prenose samo na novi događaj sa istim `event_id`; neuparene beleške idu u `orphaned_annotations` sa izvornim ID-em i ne vraćaju stari događaj ili stari medijski put u aktivnu sesiju.
 
 Pre nastavka proveri svaku isporučenu datoteku:
 
@@ -129,19 +133,26 @@ Server sluša samo na loopback adresi. Port `0` bira prvi slobodan port:
   --session-dir /private/tmp/lionjudo-video-review-session/session --port 0
 ```
 
-U pregledaču proveri srpsko-latinične oznake, oba jednaka video prikaza, izbor događaja, sinhronizovano traženje i klik na grafikon, `Sačuvaj`, kao i neposredne `/izvestaj.csv` i `/izvestaj.md` izvoze. Povredni događaj mora imati oznaku `Prijavljen povredni događaj` i ostati samo za čitanje. To je namerno: snimak se čuva kao trag, ali se događaj ne koristi za normalnu statistiku niti za trening.
+U pregledaču proveri srpsko-latinične oznake, oba jednaka video prikaza, izbor događaja, sinhronizovano traženje i klik na grafikon, `Sačuvaj`, kao i neposredne `/izvestaj.csv` i `/izvestaj.md` izvoze. `Novi događaj`, `Primeni granice`, `Podeli`, `Spoji sa sledećim` i `Obriši` rade na Sony master osi; iPhone granice se računaju inverznom afinom mapom. Svaka uspešna izmena ponovo pravi oba klipa iz nepromenljivih izvora, proverava veličinu i trajanje, seče metrike iz sačuvanih kadrova, obnavlja izveštaje i tek zatim atomski menja `review.json`.
+
+Promena granica čuva postojeću anotaciju. Podela je konzervativna: leva polovina zadržava anotaciju, desna počinje bez trenerove anotacije i bez glasovnog predloga. Spajanje susednih normalnih događaja čuva jedinu popunjenu ili dve identične anotacije; dve različite popunjene anotacije daju `409` dok ih trener ne uskladi. Brisanje anotiranog događaja premešta njegova polja u `orphaned_annotations`. Povredni događaj se ne može menjati, deliti, spajati ili obrisati i mora ostati samo za čitanje. To je namerno: snimak se čuva kao trag, ali se događaj ne koristi za normalnu statistiku niti za trening.
 
 ## Značenje metrika i ograničenja
 
 Sve video metrike su **normalizovani opisi kretanja u ravni kamere**. One nisu fizički instrumenti.
+
+Kanonski niz svakog `frame_metrics` zapisa koristi Sony `timestamp_s` i ključeve `brzina_ulaska_norm`, `rotacija_trupa_2d_dps`, `promena_visine_kukova_norm`, `sirina_stava_norm` i `intenzitet_pokreta_0_100`. Isti nazivi se koriste u Python serijalizaciji, `review.json`, izveštajima i JavaScript grafikonima. Intenzitet je stvarno izračunat uzorak u opsegu `0..100`, poravnat sa tim timestampom; nedostajući uzorak ostaje `null`, ne zamenjuje se izmišljenom vrednošću.
 
 | Metrika | Značenje | Granica tumačenja |
 |---|---|---|
 | `Brzina ulaska norm` | Promena položaja izabranih tačaka tela, skalirana veličinom tela i kadrom | Ne predstavlja brzinu u metrima u sekundi |
 | `Rotacija trupa 2D (step/s)` | Promena 2D ugla linije ramena/kukova | Ne meri 3D ugaonu brzinu ili silu |
 | `Promena visine kukova norm` | Relativna promena visine kukova u kadru | Perspektiva, zaklon i izbor poze mogu je promeniti |
+| `Širina stava norm` | Normalizovano 2D rastojanje između članaka u ravni kamere | Nije mera stabilnosti niti 3D razmak |
 | `Vreme oporavka (s)` | Vreme do povratka detektovanog kretanja ispod praga | Nije medicinsko vreme oporavka |
 | `Intenzitet pokreta (0-100)` | Interno skalirana video energija kretanja | Nije sila, snaga, energija, vat, ubrzanje ili težina udarca |
+
+`Vreme oporavka (s)` se meri od timestamp-a najveće konačne energije pokreta u događaju do timestamp-a trećeg uzastopnog uzorkovanog opažanja sa energijom `<= 0.20`. Tačno tri susedna uzorka su potrebna; nedostajući uzorak, rupa u indeksima ili vrednost `> 0.20` prekida niz. Rezultat je `None` kada vrh ili takav niz nisu opaženi unutar događaja. Pri uzorkovanju od približno `3 FPS` to je transparentan video-deskriptor, ne medicinska procena oporavka.
 
 Ne izvoditi zaključke o sili, snazi, vatima, fizičkom ubrzanju, težini udara ili medicinskoj dijagnozi. Oznaka tehnike je predlog/beleška trenera, ne automatska stručna presuda.
 

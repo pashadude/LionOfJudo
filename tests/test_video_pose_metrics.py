@@ -101,6 +101,30 @@ class PoseMetricsTests(unittest.TestCase):
         json.dumps(metrics[0].to_dict(), allow_nan=False)
         self.assertEqual(metrics[0].timestamp_s, 12.5)
 
+    def test_serialized_frame_uses_canonical_chart_keys_and_aligned_intensity(self):
+        metric = compute_pose_metrics(
+            [
+                pose(0, 100, (-5, 80), (5, 80)),
+                pose(10, 95, (5, 75), (15, 75)),
+            ],
+            fps=3.0,
+            timestamps=[12.0, 12.0 + 1.0 / 3.0],
+        )[1]
+
+        payload = metric.to_dict(intensity_0_100=37.5)
+
+        self.assertEqual(payload["timestamp_s"], 12.0 + 1.0 / 3.0)
+        self.assertEqual(payload["intenzitet_pokreta_0_100"], 37.5)
+        self.assertIsNotNone(payload["brzina_ulaska_norm"])
+        self.assertIsNotNone(payload["rotacija_trupa_2d_dps"])
+        self.assertIsNotNone(payload["promena_visine_kukova_norm"])
+        self.assertIsNotNone(payload["sirina_stava_norm"])
+        self.assertNotIn("brzina_ulaska_norm_s", payload)
+        self.assertNotIn("rotation_2d_dps", payload)
+        self.assertNotIn("hip_level_norm", payload)
+        self.assertNotIn("stance_width_norm", payload)
+        json.dumps(payload, allow_nan=False)
+
 
 if __name__ == "__main__":
     unittest.main()

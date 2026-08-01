@@ -13,10 +13,16 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
-from pipeline.clip_extractor import cut_clip, probe_duration, probe_fps
+from pipeline.clip_extractor import (
+    cut_clip,
+    probe_duration,
+    probe_fps,
+    verify_media_export,
+)
 from pipeline.video_event_detection import (
     EventMetrics,
     motion_energy,
+    recovery_to_stable_s,
     recover_blue_pose,
     select_blue_detection,
     suggest_event_metrics,
@@ -27,7 +33,13 @@ from pipeline.video_review_contract import (
     AnchorPair,
     ReviewEvent,
     ReviewSession,
+    validate_review_payload,
     validate_review_session,
+)
+from pipeline.video_review_reports import write_reports
+from pipeline.video_review_metrics import (
+    canonical_metric_schema,
+    canonicalize_frame_metrics,
 )
 from pipeline.video_sync import fit_time_map
 from pipeline.voice_labels import load_whisper_json, suggest_techniques
@@ -43,31 +55,6 @@ ANNOTATION_KEYS = {
     "coach_annotations",
     "annotations",
 }
-
-
-def verify_media_export(
-    video: Path,
-    expected_duration_s: float | None = None,
-    tolerance_s: float = EXPORT_TOLERANCE_S,
-) -> float:
-    """Verify an importer export using this module's probe boundary."""
-    video = Path(video)
-    if not video.is_file() or video.stat().st_size == 0:
-        raise ValueError(f"izvoz medija je prazan: {video}")
-    duration = _finite(probe_duration(video), "duration_s")
-    if duration < 0.0:
-        raise ValueError(f"trajanje izvoza nije nenegativno: {video}")
-    if expected_duration_s is not None:
-        expected = _finite(expected_duration_s, "expected_duration_s")
-        tolerance = _finite(tolerance_s, "tolerance_s")
-        if expected <= 0.0 or tolerance < 0.0:
-            raise ValueError("provera izvoza zahteva valjano trajanje i toleranciju")
-        if abs(duration - expected) > tolerance:
-            raise ValueError(
-                f"trajanje izvoza odstupa od prozora: {duration:.3f}s prema "
-                f"{expected:.3f}s"
-            )
-    return duration
 
 
 def _finite(value: object, field_name: str) -> float:
@@ -195,7 +182,12 @@ def make_side_by_side(
         str(output),
     ]
     subprocess.run(command, check=True, capture_output=True)
-    verify_media_export(output, end_s, EXPORT_TOLERANCE_S)
+    verify_media_export(
+        output,
+        end_s,
+        EXPORT_TOLERANCE_S,
+        probe=probe_duration,
+    )
     return output
 
 
@@ -389,7 +381,16 @@ def run_pose_analysis(
         "selected_track_id": selected_track_id,
         "blue_seed_sony": seed,
         "athlete_seen": selected_seen,
-        "frame_metrics": [metric.to_dict() for metric in metrics],
+        "frame_metrics": [
+            metric.to_dict(
+                intensity_0_100=(
+                    None
+                    if energy[index] is None
+                    else min(100.0, max(0.0, float(energy[index]) * 100.0))
+                )
+            )
+            for index, metric in enumerate(metrics)
+        ],
         "motion_energy": json_safe(energy),
         "events": [
             {"event_id": f"e-{index:03d}", **event.to_dict()}
@@ -458,6 +459,11 @@ def _enrich_event_metrics(
         for metric, _ in samples
         if metric.hip_level_norm is not None
     ]
+    stance_widths = [
+        metric.stance_width_norm
+        for metric, _ in samples
+        if metric.stance_width_norm is not None
+    ]
     energies = [value for _, value in samples if value is not None]
     return replace(
         event,
@@ -465,6 +471,13 @@ def _enrich_event_metrics(
         rotacija_trupa_2d_dps=max(rotations) if rotations else None,
         promena_visine_kukova_norm=(
             max(hip_levels) - min(hip_levels) if hip_levels else None
+        ),
+        sirina_stava_norm=max(stance_widths) if stance_widths else None,
+        vreme_oporavka_s=recovery_to_stable_s(
+            [metric.timestamp_s for metric in metrics],
+            energy,
+            event.sony_start_s,
+            event.sony_end_s,
         ),
         intenzitet_pokreta_0_100=(max(energies) * 100.0 if energies else None),
     )
@@ -532,11 +545,25 @@ def _merge_trainer_annotations(
         for key in ANNOTATION_KEYS:
             if key in old and old[key] not in (None, "", {}, []):
                 event[key] = json_safe(old[key])
+    orphaned = [
+        json_safe(dict(item))
+        for item in previous.get("orphaned_annotations", [])
+        if isinstance(item, Mapping)
+    ]
     for event_id, old in previous_events.items():
-        if event_id not in current_ids and any(
-            old.get(key) not in (None, "", {}, []) for key in ANNOTATION_KEYS
-        ):
-            payload.setdefault("events", []).append(json_safe(dict(old)))
+        fields = {
+            key: json_safe(old[key])
+            for key in ANNOTATION_KEYS
+            if key in old and old[key] not in (None, "", {}, [])
+        }
+        if event_id not in current_ids and fields:
+            orphaned.append({
+                "source_event_id": event_id,
+                "reason": "neupareni_dogadjaj_pri_ponovnom_uvozu",
+                **fields,
+            })
+    if orphaned:
+        payload["orphaned_annotations"] = orphaned
     return payload
 
 
@@ -571,7 +598,12 @@ def _export_clip(
         return None
     start, end = window
     result = cut_clip(source, start, end, output)
-    verify_media_export(result, end - start, EXPORT_TOLERANCE_S)
+    verify_media_export(
+        result,
+        end - start,
+        EXPORT_TOLERANCE_S,
+        probe=probe_duration,
+    )
     return result
 
 
@@ -612,6 +644,7 @@ def _event_payload(
         "brzina_ulaska_norm",
         "rotacija_trupa_2d_dps",
         "promena_visine_kukova_norm",
+        "sirina_stava_norm",
         "vreme_oporavka_s",
         "intenzitet_pokreta_0_100",
         "predlog_tehnike",
@@ -693,7 +726,9 @@ def import_session(
         event_threshold=event_threshold,
     )
     if isinstance(pose_result, Mapping):
-        frame_metrics = json_safe(list(pose_result.get("frame_metrics", [])))
+        frame_metrics = canonicalize_frame_metrics(
+            list(pose_result.get("frame_metrics", []))
+        )
         pose_events = pose_result.get("events", [])
         pose_summary = {
             "fps": pose_result.get("fps"),
@@ -846,25 +881,38 @@ def import_session(
         injury_cutoff_s,
         side_by_side,
     )
-    verify_media_export(side_by_side, injury_cutoff_s, EXPORT_TOLERANCE_S)
+    verify_media_export(
+        side_by_side,
+        injury_cutoff_s,
+        EXPORT_TOLERANCE_S,
+        probe=probe_duration,
+    )
 
     if transcript_path is not None:
         words = load_whisper_json(Path(transcript_path))
+        normal_events = [
+            event for event in events
+            if not event.get("iskljuceno_iz_statistike")
+        ]
         suggestions = suggest_techniques(
             words,
             [
                 (event["event_id"], event["sony_start_s"], event["sony_end_s"])
-                for event in events
+                for event in normal_events
             ],
         )
-        for event in events:
-            if event.get("iskljuceno_iz_statistike"):
-                continue
+        for event in normal_events:
             suggestion = suggestions[event["event_id"]]
-            event.update(json_safe(suggestion.__dict__))
+            event.update(json_safe(suggestion.to_review_fields()))
+        transcript_evidence = [
+            {"tekst": word.text, "pocetak_s": word.start_s, "kraj_s": word.end_s}
+            for word in words
+        ]
+    else:
+        transcript_evidence = []
 
     payload: dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "session_id": output_dir.name,
         "sony_video": str(sony),
         "iphone_video": str(iphone),
@@ -884,22 +932,35 @@ def import_session(
         "injury_cutoff_s": injury_cutoff_s,
         "blue_seed_sony": blue_seed,
         "pose_analysis": pose_summary,
+        "metric_schema": canonical_metric_schema(profile["effective_analysis_fps"]),
         "frame_metrics": frame_metrics,
         "event_metrics": events,
         "events": events,
+        "transkript": transcript_evidence,
+        "sync_locked": True,
         "status": "Uvoz zavrsen; normalna obrada zaustavljena na potvrdenom preseku povrede.",
     }
     if previous is not None and force_reimport:
         payload = _merge_trainer_annotations(payload, previous)
 
+    validate_review_payload(payload)
     review_path = write_review_json(output_dir, payload)
+    write_reports(review_path, payload)
     _write_analysis_json(
         output_dir / "analysis" / "frame_metrics.json",
-        {"frame_metrics": frame_metrics, "pose_analysis": pose_summary},
+        {
+            "frame_metrics": frame_metrics,
+            "pose_analysis": pose_summary,
+            "metric_schema": payload["metric_schema"],
+        },
     )
     _write_analysis_json(
         output_dir / "analysis" / "event_metrics.json",
         {"events": events},
+    )
+    _write_analysis_json(
+        output_dir / "analysis" / "transcript.json",
+        {"transkript": transcript_evidence},
     )
     _write_summary(
         output_dir,

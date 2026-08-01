@@ -29,7 +29,19 @@ class TechniqueSuggestion:
     predlog_tehnike: str | None
     source_phrase: str | None = None
     confidence: float = 0.0
+    source_start_s: float | None = None
+    source_end_s: float | None = None
     user_confirmed: bool = False
+
+    def to_review_fields(self) -> dict[str, str | float | None]:
+        """Map source evidence explicitly onto the canonical review fields."""
+        return {
+            "predlog_tehnike": self.predlog_tehnike,
+            "glasovna_fraza": self.source_phrase,
+            "pouzdanost_glasa": float(self.confidence),
+            "glasovna_fraza_pocetak_s": self.source_start_s,
+            "glasovna_fraza_kraj_s": self.source_end_s,
+        }
 
 
 TECHNIQUE_VOCABULARY: dict[str, str] = {
@@ -156,5 +168,7 @@ def suggest_techniques(
             predlog_tehnike=technique,
             source_phrase=word.text,
             confidence=confidence,
+            source_start_s=word.start_s,
+            source_end_s=word.end_s,
         )
     return suggestions

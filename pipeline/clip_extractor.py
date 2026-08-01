@@ -10,6 +10,7 @@ ruin the tight throw windows.
 import subprocess
 from math import isfinite
 from pathlib import Path
+from typing import Callable
 
 
 def cut_clip(video: Path, t_start: float, t_end: float, out_path: Path,
@@ -52,13 +53,15 @@ def verify_media_export(
     video: Path,
     expected_duration_s: float | None = None,
     tolerance_s: float = 0.75,
+    *,
+    probe: Callable[[Path], float] | None = None,
 ) -> float:
     """Reject empty or unexpectedly short/long ffmpeg output."""
     video = Path(video)
     if not video.is_file() or video.stat().st_size == 0:
         raise ValueError(f"izvoz medija je prazan: {video}")
 
-    duration = probe_duration(video)
+    duration = (probe or probe_duration)(video)
     if not isfinite(duration) or duration < 0.0:
         raise ValueError(f"trajanje izvoza nije konacno: {video}")
     if expected_duration_s is not None:

@@ -14,6 +14,8 @@ from .video_pose_metrics import FrameMetric, json_safe
 DEFAULT_CONFIDENCE = 0.3
 DEFAULT_WINDOW_EXPANSION_S = 1.0
 DEFAULT_MERGE_GAP_S = 1.5
+DEFAULT_STABLE_THRESHOLD = 0.20
+DEFAULT_STABLE_SAMPLES = 3
 NEDOVOLJNO_VIDLJIVO = "nedovoljno_vidljivo"
 
 
@@ -156,14 +158,32 @@ def recover_blue_pose(
 recover_track = recover_blue_pose
 
 
-def motion_energy(metrics: Sequence[FrameMetric], smoothing: int = 3) -> list[float | None]:
+def _frame_metric_value(metric: FrameMetric | Mapping[str, Any], *keys: str) -> Any:
+    if isinstance(metric, Mapping):
+        for key in keys:
+            if key in metric:
+                return metric[key]
+        return None
+    for key in keys:
+        if hasattr(metric, key):
+            return getattr(metric, key)
+    return None
+
+
+def motion_energy(
+    metrics: Sequence[FrameMetric | Mapping[str, Any]], smoothing: int = 3
+) -> list[float | None]:
     """Combine normalized entry and rotation proxies into a smoothed score."""
     speeds = np.asarray([
-        metric.brzina_ulaska_norm_s if metric.brzina_ulaska_norm_s is not None else np.nan
+        value if (value := _frame_metric_value(
+            metric, "brzina_ulaska_norm", "brzina_ulaska_norm_s"
+        )) is not None else np.nan
         for metric in metrics
     ], dtype=float)
     rotations = np.asarray([
-        abs(metric.rotation_2d_dps) if metric.rotation_2d_dps is not None else np.nan
+        abs(value) if (value := _frame_metric_value(
+            metric, "rotacija_trupa_2d_dps", "rotation_2d_dps"
+        )) is not None else np.nan
         for metric in metrics
     ], dtype=float)
 
@@ -192,6 +212,63 @@ def motion_energy(metrics: Sequence[FrameMetric], smoothing: int = 3) -> list[fl
         finite = neighbours[np.isfinite(neighbours)]
         smoothed[index] = np.mean(finite) if finite.size else np.nan
     return [float(value) if np.isfinite(value) else None for value in smoothed]
+
+
+def recovery_to_stable_s(
+    timestamps: Sequence[float],
+    motion_samples: Sequence[float | None],
+    event_start_s: float,
+    event_end_s: float,
+    *,
+    stable_threshold: float = DEFAULT_STABLE_THRESHOLD,
+    consecutive_samples: int = DEFAULT_STABLE_SAMPLES,
+) -> float | None:
+    """Measure recovery from peak motion to confirmed stable sampled motion.
+
+    Stability is observable only after ``consecutive_samples`` adjacent,
+    finite samples at or below ``stable_threshold``. Missing or higher-energy
+    samples reset the run. The duration ends at the final confirming sample;
+    if no such run follows the event peak, the result is ``None``.
+    """
+    if len(timestamps) != len(motion_samples):
+        raise ValueError("timestamps must have one value per motion sample")
+    if isinstance(consecutive_samples, bool) or not isinstance(consecutive_samples, int):
+        raise TypeError("consecutive_samples must be an integer")
+    if consecutive_samples <= 0:
+        raise ValueError("consecutive_samples must be positive")
+    threshold = float(stable_threshold)
+    start = float(event_start_s)
+    end = float(event_end_s)
+    if not all(isfinite(value) for value in (threshold, start, end)):
+        raise ValueError("recovery bounds and threshold must be finite")
+    if threshold < 0.0 or end <= start:
+        raise ValueError("recovery bounds and threshold are invalid")
+
+    observed: list[tuple[int, float, float]] = []
+    for index, (timestamp, sample) in enumerate(zip(timestamps, motion_samples)):
+        timestamp_value = float(timestamp)
+        if not isfinite(timestamp_value):
+            raise ValueError("timestamps must be finite")
+        if not start <= timestamp_value <= end or sample is None:
+            continue
+        sample_value = float(sample)
+        if isfinite(sample_value):
+            observed.append((index, timestamp_value, sample_value))
+    if not observed:
+        return None
+    peak_position = max(range(len(observed)), key=lambda index: observed[index][2])
+    peak_index, peak_time, _ = observed[peak_position]
+    run = 0
+    previous_index = peak_index
+    for index, timestamp, sample in observed[peak_position + 1:]:
+        if index != previous_index + 1 or sample > threshold:
+            run = 0
+        else:
+            run += 1
+            if run >= consecutive_samples:
+                return float(timestamp - peak_time)
+        previous_index = index
+    return None
 
 
 def suggest_event_windows(
@@ -281,6 +358,7 @@ class EventMetrics:
     brzina_ulaska_norm: float | None = None
     rotacija_trupa_2d_dps: float | None = None
     promena_visine_kukova_norm: float | None = None
+    sirina_stava_norm: float | None = None
     vreme_oporavka_s: float | None = None
     intenzitet_pokreta_0_100: float | None = None
 
@@ -350,6 +428,7 @@ __all__ = [
     "motion_energy",
     "NEDOVOLJNO_VIDLJIVO",
     "recover_blue_pose",
+    "recovery_to_stable_s",
     "recover_track",
     "select_blue_detection",
     "select_blue_track_id",

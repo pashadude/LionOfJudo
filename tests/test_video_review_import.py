@@ -7,8 +7,10 @@ from unittest.mock import patch
 import tempfile
 import numpy as np
 
+from pipeline.clip_extractor import verify_media_export as canonical_verify_media_export
 from pipeline.video_review_contract import AnchorPair
 from pipeline.video_review_import import (
+    _merge_trainer_annotations,
     import_session,
     make_side_by_side,
     run_pose_analysis,
@@ -600,9 +602,82 @@ class VideoReviewImportTests(TestCase):
             with self.assertRaises(ValueError):
                 verify_media_export(output, expected_duration_s=2.0)
             output.write_bytes(b"video")
-            with patch("pipeline.video_review_import.probe_duration", return_value=4.0):
+            with patch("pipeline.clip_extractor.probe_duration", return_value=4.0):
                 with self.assertRaises(ValueError):
                     verify_media_export(output, expected_duration_s=2.0)
+
+    def test_importer_uses_canonical_media_verifier_with_injectable_probe(self):
+        self.assertIs(verify_media_export, canonical_verify_media_export)
+        with self._temporary_directory() as output_dir:
+            output = Path(output_dir) / "clip.mp4"
+            output.write_bytes(b"video")
+            calls = []
+
+            duration = verify_media_export(
+                output,
+                expected_duration_s=2.0,
+                probe=lambda path: calls.append(Path(path)) or 2.0,
+            )
+
+        self.assertEqual(duration, 2.0)
+        self.assertEqual(calls, [output])
+
+    def test_force_reimport_preserves_matches_and_orphans_unmatched_annotations(self):
+        fresh = {
+            "injury_cutoff_s": 20.0,
+            "events": [
+                {
+                    "event_id": "e-match",
+                    "sony_start_s": 11.0,
+                    "sony_end_s": 14.0,
+                    "potvrdena_tehnika": None,
+                    "ocena": None,
+                    "napomena": None,
+                    "iskljuceno_iz_statistike": False,
+                },
+                {
+                    "event_id": "povreda",
+                    "sony_start_s": 20.0,
+                    "sony_end_s": 21.0,
+                    "prijavljen_povredni_dogadjaj": True,
+                    "iskljuceno_iz_statistike": True,
+                },
+            ],
+        }
+        previous = {
+            "events": [
+                {
+                    "event_id": "e-match",
+                    "sony_start_s": 11.0,
+                    "sony_end_s": 14.0,
+                    "potvrdena_tehnika": "O-soto-gari",
+                    "ocena": 4,
+                    "napomena": "Sačuvaj me.",
+                },
+                {
+                    "event_id": "e-stale",
+                    "sony_start_s": 25.0,
+                    "sony_end_s": 30.0,
+                    "media": {"sony": "/media/events/e-stale/sony.mp4"},
+                    "potvrdena_tehnika": "Uki-goshi",
+                    "ocena": 2,
+                    "napomena": "Ne vraćaj kao aktivan događaj.",
+                },
+            ]
+        }
+
+        merged = _merge_trainer_annotations(fresh, previous)
+
+        self.assertEqual([event["event_id"] for event in merged["events"]], ["e-match", "povreda"])
+        self.assertEqual(merged["events"][0]["potvrdena_tehnika"], "O-soto-gari")
+        self.assertEqual(merged["events"][0]["ocena"], 4)
+        self.assertEqual(merged["events"][0]["napomena"], "Sačuvaj me.")
+        self.assertEqual(len(merged["orphaned_annotations"]), 1)
+        orphan = merged["orphaned_annotations"][0]
+        self.assertEqual(orphan["source_event_id"], "e-stale")
+        self.assertEqual(orphan["potvrdena_tehnika"], "Uki-goshi")
+        self.assertNotIn("media", orphan)
+        self.assertTrue(all(event["sony_end_s"] <= 21.0 for event in merged["events"]))
 
     @staticmethod
     def _temporary_directory():

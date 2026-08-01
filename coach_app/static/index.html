@@ -13,7 +13,10 @@
       <h1 id="session-title">Video pregled</h1>
     </div>
     <div class="top-actions">
-      <button id="sync-button" class="button secondary" type="button">Sinhronizacija</button>
+      <div class="sync-state">
+        <button id="sync-button" class="button secondary" type="button">Sinhronizacija</button>
+        <span id="sync-lock-note" class="sync-lock-note" hidden>Zaključano posle uvoza</span>
+      </div>
       <a id="export-link" class="button secondary" href="/izvestaj.csv" download>Izvezi izveštaj</a>
     </div>
   </header>
@@ -50,13 +53,24 @@
           <span id="time-readout" class="time-readout">0.00 s</span>
           <input id="master-seek" type="range" min="0" max="1" step="0.001" value="0" aria-label="Sony vremenska osa">
         </div>
+        <div class="event-correction" aria-label="Ispravka granica događaja">
+          <label>Početak (Sony s)<input id="event-start" type="number" min="0" step="0.001" inputmode="decimal"></label>
+          <label>Kraj (Sony s)<input id="event-end" type="number" min="0" step="0.001" inputmode="decimal"></label>
+          <div class="event-correction-actions">
+            <button id="update-bounds-button" class="button secondary" type="button" disabled>Primeni granice</button>
+            <button id="create-event-button" class="button secondary" type="button">Novi događaj</button>
+            <button id="split-button" class="button secondary" type="button" disabled>Podeli</button>
+            <button id="merge-button" class="button secondary" type="button" disabled>Spoji sa sledećim</button>
+            <button id="delete-button" class="button danger" type="button" disabled>Obriši</button>
+          </div>
+        </div>
       </section>
 
       <section class="charts-section" aria-label="Video metrike">
         <article class="chart-panel"><h3>Brzina ulaska</h3><canvas data-metric="brzina_ulaska_norm"></canvas></article>
         <article class="chart-panel"><h3>Rotacija trupa (2D)</h3><canvas data-metric="rotacija_trupa_2d_dps"></canvas></article>
         <article class="chart-panel"><h3>Visina kukova</h3><canvas data-metric="promena_visine_kukova_norm"></canvas></article>
-        <article class="chart-panel"><h3>Stabilnost</h3><canvas data-metric="vreme_oporavka_s"></canvas></article>
+        <article class="chart-panel"><h3>Širina stava</h3><canvas data-metric="sirina_stava_norm"></canvas></article>
         <article class="chart-panel"><h3>Intenzitet pokreta</h3><canvas data-metric="intenzitet_pokreta_0_100"></canvas></article>
       </section>
 
@@ -74,9 +88,6 @@
           </div>
           <div class="form-actions">
             <button id="save-button" class="button primary" type="submit" disabled>Sačuvaj</button>
-            <button id="share-button" class="button secondary" type="button">Podeli</button>
-            <button id="merge-button" class="button secondary" type="button" disabled title="Izaberite dva događaja">Spoji</button>
-            <button id="delete-button" class="button danger" type="button" disabled title="Brisanje nije dostupno u ovom pregledu">Obriši</button>
           </div>
         </form>
       </section>

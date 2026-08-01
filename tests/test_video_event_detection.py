@@ -6,6 +6,7 @@ import numpy as np
 from pipeline.video_event_detection import (
     EventMetrics,
     bbox_iou,
+    recovery_to_stable_s,
     recover_blue_pose,
     select_blue_detection,
     suggest_event_windows,
@@ -124,6 +125,30 @@ class EventDetectionTests(unittest.TestCase):
         self.assertIsNone(payload["sony_end_s"])
         self.assertIsNone(payload["intenzitet_pokreta_0_100"])
         json.dumps(payload, allow_nan=False)
+
+    def test_recovery_requires_three_consecutive_samples_at_or_below_threshold(self):
+        recovery = recovery_to_stable_s(
+            timestamps=[0.0, 1.0, 2.0, 3.0, 4.0],
+            motion_samples=[0.1, 1.0, 0.20, 0.15, 0.05],
+            event_start_s=0.0,
+            event_end_s=4.0,
+            stable_threshold=0.20,
+            consecutive_samples=3,
+        )
+
+        self.assertEqual(recovery, 3.0)
+
+    def test_recovery_is_none_when_missing_or_active_sample_breaks_stability(self):
+        recovery = recovery_to_stable_s(
+            timestamps=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            motion_samples=[0.1, 1.0, 0.1, None, 0.1, 0.21],
+            event_start_s=0.0,
+            event_end_s=5.0,
+            stable_threshold=0.20,
+            consecutive_samples=3,
+        )
+
+        self.assertIsNone(recovery)
 
 
 if __name__ == "__main__":

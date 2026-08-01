@@ -119,8 +119,16 @@ class FrameMetric:
     def torso_length_px(self) -> float | None:
         return self.torso_length
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return only Python scalar/list values suitable for JSON export."""
+    def to_dict(self, *, intensity_0_100: float | None = None) -> dict[str, Any]:
+        """Return the canonical per-frame review schema.
+
+        ``intensity_0_100`` is supplied by the session-level motion-energy
+        normalization so it stays aligned with this frame's timestamp.
+        """
+        if intensity_0_100 is not None:
+            intensity_0_100 = float(intensity_0_100)
+            if not isfinite(intensity_0_100) or not 0.0 <= intensity_0_100 <= 100.0:
+                raise ValueError("intensity_0_100 must be finite and within 0..100")
         return json_safe({
             "frame_index": self.frame_index,
             "timestamp_s": self.timestamp_s,
@@ -130,12 +138,13 @@ class FrameMetric:
             ),
             "torso_length": self.torso_length,
             "shoulder_angle_deg": self.shoulder_angle_deg,
-            "stance_width_norm": self.stance_width_norm,
             "vidljivo": self.vidljivo,
             "interpolirano": self.interpolirano,
-            "brzina_ulaska_norm_s": self.brzina_ulaska_norm_s,
-            "rotation_2d_dps": self.rotation_2d_dps,
-            "hip_level_norm": self.hip_level_norm,
+            "brzina_ulaska_norm": self.brzina_ulaska_norm_s,
+            "rotacija_trupa_2d_dps": self.rotation_2d_dps,
+            "promena_visine_kukova_norm": self.hip_level_norm,
+            "sirina_stava_norm": self.stance_width_norm,
+            "intenzitet_pokreta_0_100": intensity_0_100,
         })
 
 

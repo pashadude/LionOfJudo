@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import csv
 import json
 import mimetypes
-import os
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import unquote, urlsplit
 
 from pipeline.video_review_contract import (
@@ -20,81 +18,29 @@ from pipeline.video_review_contract import (
     validate_review_session,
 )
 from pipeline.video_sync import fit_time_map
+from pipeline.clip_extractor import cut_clip, probe_duration
+from pipeline.video_review_reports import event_is_injury, write_reports
+from pipeline.video_review_storage import atomic_write_review, load_review_json
+
+from coach_app.event_editor import EventConflictError, EventEditor, MediaExportError
 
 
 ANNOTATION_FIELDS = {"potvrdena_tehnika", "ocena", "napomena"}
 MAX_EVENT_ID_LENGTH = 128
 MAX_TECHNIQUE_LENGTH = 120
 MAX_NOTE_LENGTH = 2000
-REPORT_FIELDS = (
-    "event_id",
-    "Vreme početka (s)",
-    "Vreme kraja (s)",
-    "Predlog tehnike",
-    "Potvrđena tehnika",
-    "Glasovna fraza",
-    "Pouzdanost glasa",
-    "Brzina ulaska norm",
-    "Rotacija trupa 2D (step/s)",
-    "Promena visine kukova norm",
-    "Vreme oporavka (s)",
-    "Intenzitet pokreta (0-100)",
-    "Ocena",
-    "Napomena",
-    "Status",
-    "Isključeno iz statistike",
-)
-METRIC_KEYS = (
-    "brzina_ulaska_norm",
-    "rotacija_trupa_2d_dps",
-    "promena_visine_kukova_norm",
-    "vreme_oporavka_s",
-    "intenzitet_pokreta_0_100",
-)
 
 
 def _strict_load(path: Path) -> dict[str, Any]:
-    def reject_constant(value: str) -> None:
-        raise ValueError(f"JSON konstanta nije dozvoljena: {value}")
-
-    try:
-        value = json.loads(
-            path.read_text(encoding="utf-8"),
-            parse_constant=reject_constant,
-        )
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("review.json nije validan strogi JSON") from exc
-    if not isinstance(value, dict):
-        raise ValueError("review.json mora sadržati JSON objekat")
-    return value
+    return load_review_json(path)
 
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
-    temporary = path.with_name(f"{path.name}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8") as handle:
-            json.dump(
-                dict(payload),
-                handle,
-                ensure_ascii=False,
-                allow_nan=False,
-                indent=2,
-                sort_keys=True,
-            )
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write_review(path, payload)
 
 
 def _event_is_injury(event: Mapping[str, Any]) -> bool:
-    return bool(
-        event.get("prijavljen_povredni_dogadjaj")
-        or event.get("iskljuceno_iz_statistike")
-        or event.get("status") == "povreda"
-    )
+    return event_is_injury(event)
 
 
 def _validate_annotation(event_id: object, payload: object, event: Mapping[str, Any]) -> dict[str, Any]:
@@ -122,72 +68,8 @@ def _validate_annotation(event_id: object, payload: object, event: Mapping[str, 
     }
 
 
-def _report_row(event: Mapping[str, Any]) -> dict[str, Any]:
-    status_parts = []
-    if _event_is_injury(event):
-        status_parts.append("Prijavljen povredni događaj")
-    if str(event.get("vidljivost", "")).lower() == "nedovoljno vidljivo":
-        status_parts.append("Nedovoljno vidljivo")
-    return {
-        "event_id": event.get("event_id", ""),
-        "Vreme početka (s)": event.get("sony_start_s", ""),
-        "Vreme kraja (s)": event.get("sony_end_s", ""),
-        "Predlog tehnike": event.get("predlog_tehnike", ""),
-        "Potvrđena tehnika": event.get("potvrdena_tehnika", ""),
-        "Glasovna fraza": event.get("glasovna_fraza", ""),
-        "Pouzdanost glasa": event.get("pouzdanost_glasa", ""),
-        "Brzina ulaska norm": event.get("brzina_ulaska_norm", ""),
-        "Rotacija trupa 2D (step/s)": event.get("rotacija_trupa_2d_dps", ""),
-        "Promena visine kukova norm": event.get("promena_visine_kukova_norm", ""),
-        "Vreme oporavka (s)": event.get("vreme_oporavka_s", ""),
-        "Intenzitet pokreta (0-100)": event.get("intenzitet_pokreta_0_100", ""),
-        "Ocena": event.get("ocena", ""),
-        "Napomena": event.get("napomena", ""),
-        "Status": "; ".join(status_parts) or event.get("status", ""),
-        "Isključeno iz statistike": "da" if _event_is_injury(event) else "ne",
-    }
-
-
 def _write_report(path: Path, review: Mapping[str, Any]) -> None:
-    events = review.get("events", [])
-    if not isinstance(events, list):
-        raise ValueError("events mora biti JSON lista")
-    csv_path = path.with_name("izvestaj.csv")
-    csv_tmp = csv_path.with_name("izvestaj.csv.tmp")
-    try:
-        with csv_tmp.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=REPORT_FIELDS, extrasaction="raise")
-            writer.writeheader()
-            writer.writerows(_report_row(event) for event in events if isinstance(event, dict))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(csv_tmp, csv_path)
-    finally:
-        csv_tmp.unlink(missing_ok=True)
-
-    markdown_path = path.with_name("izvestaj.md")
-    markdown_tmp = markdown_path.with_name("izvestaj.md.tmp")
-    def md(value: object) -> str:
-        return str(value if value is not None else "").replace("|", "\\|").replace("\n", "<br>")
-
-    try:
-        with markdown_tmp.open("w", encoding="utf-8") as handle:
-            normal_count = sum(
-                1 for event in events if isinstance(event, dict) and not _event_is_injury(event)
-            )
-            handle.write("# Izveštaj trenerskog pregleda\n\n")
-            handle.write(f"Normalni događaji u statistici: {normal_count}\n\n")
-            handle.write("| " + " | ".join(REPORT_FIELDS) + " |\n")
-            handle.write("| " + " | ".join("---" for _ in REPORT_FIELDS) + " |\n")
-            for event in events:
-                if isinstance(event, dict):
-                    row = _report_row(event)
-                    handle.write("| " + " | ".join(md(row[field]) for field in REPORT_FIELDS) + " |\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(markdown_tmp, markdown_path)
-    finally:
-        markdown_tmp.unlink(missing_ok=True)
+    write_reports(path, review)
 
 
 def save_annotation(review_path: Path, event_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -205,6 +87,17 @@ def save_annotation(review_path: Path, event_id: str, payload: dict[str, Any]) -
         raise ValueError("događaj nije pronađen")
     annotation = _validate_annotation(event_id, payload, selected)
     selected.update(annotation)
+    event_metrics = review.get("event_metrics")
+    if isinstance(event_metrics, list):
+        metric_event = next(
+            (
+                event for event in event_metrics
+                if isinstance(event, dict) and event.get("event_id") == event_id
+            ),
+            None,
+        )
+        if metric_event is not None:
+            metric_event.update(annotation)
     _atomic_json(review_path, review)
     _write_report(review_path, review)
     return dict(selected)
@@ -231,10 +124,34 @@ def _review_session_for_sync(review: Mapping[str, Any], anchors: list[AnchorPair
     return session
 
 
+class SyncLockedError(ValueError):
+    pass
+
+
+def _sync_is_locked(review: Mapping[str, Any], session_dir: Path) -> bool:
+    if review.get("sync_locked") is True:
+        return True
+    if any(review.get(key) for key in ("events", "event_metrics", "frame_metrics")):
+        return True
+    if review.get("pose_analysis") or review.get("sources"):
+        return True
+    if (session_dir / "media" / "session_side_by_side.mp4").is_file():
+        return True
+    events_dir = session_dir / "events"
+    return events_dir.is_dir() and any(path.is_file() for path in events_dir.rglob("*"))
+
+
 class ReviewServer:
     """Lifecycle wrapper around a loopback-only review HTTP server."""
 
-    def __init__(self, session_dir: Path, port: int):
+    def __init__(
+        self,
+        session_dir: Path,
+        port: int,
+        *,
+        clip_exporter: Callable[..., Path] = cut_clip,
+        media_probe: Callable[[Path], float] = probe_duration,
+    ):
         self.session_dir = Path(session_dir).expanduser().resolve()
         if not self.session_dir.is_dir():
             raise ValueError("direktorijum sesije ne postoji")
@@ -243,6 +160,13 @@ class ReviewServer:
             raise ValueError("sesija nema review.json")
         _write_report(self.review_path, _strict_load(self.review_path))
         self.static_dir = Path(__file__).resolve().parent / "static"
+        self.mutation_lock = threading.RLock()
+        self.event_editor = EventEditor(
+            self.session_dir,
+            lock=self.mutation_lock,
+            clip_exporter=clip_exporter,
+            media_probe=media_probe,
+        )
         self.httpd = ThreadingHTTPServer(("127.0.0.1", port), _ReviewHandler)
         self.httpd.review_server = self  # type: ignore[attr-defined]
         bound_port = self.httpd.server_address[1]
@@ -258,8 +182,19 @@ class ReviewServer:
         self.httpd.server_close()
 
 
-def create_server(session_dir: Path, port: int = 8765) -> ReviewServer:
-    return ReviewServer(Path(session_dir), port)
+def create_server(
+    session_dir: Path,
+    port: int = 8765,
+    *,
+    clip_exporter: Callable[..., Path] = cut_clip,
+    media_probe: Callable[[Path], float] = probe_duration,
+) -> ReviewServer:
+    return ReviewServer(
+        Path(session_dir),
+        port,
+        clip_exporter=clip_exporter,
+        media_probe=media_probe,
+    )
 
 
 class _ReviewHandler(BaseHTTPRequestHandler):
@@ -303,7 +238,9 @@ class _ReviewHandler(BaseHTTPRequestHandler):
             elif path.startswith("/static/"):
                 self._serve_file(self.app.static_dir / path.removeprefix("/static/"), self.app.static_dir)
             elif path == "/api/session":
-                self._send_json(HTTPStatus.OK, _strict_load(self.app.review_path))
+                review = _strict_load(self.app.review_path)
+                review["sync_locked"] = _sync_is_locked(review, self.app.session_dir)
+                self._send_json(HTTPStatus.OK, review)
             elif path.startswith("/api/events/"):
                 event_id = path.removeprefix("/api/events/")
                 if not event_id or "/" in event_id:
@@ -338,8 +275,14 @@ class _ReviewHandler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         path = unquote(urlsplit(self.path).path)
         prefix = "/api/events/"
-        suffix = "/annotation"
-        if not path.startswith(prefix) or not path.endswith(suffix):
+        if not path.startswith(prefix):
+            self._error(HTTPStatus.NOT_FOUND, "resurs nije pronađen")
+            return
+        suffix = next(
+            (candidate for candidate in ("/annotation", "/bounds") if path.endswith(candidate)),
+            None,
+        )
+        if suffix is None:
             self._error(HTTPStatus.NOT_FOUND, "resurs nije pronađen")
             return
         event_id = path[len(prefix):-len(suffix)]
@@ -348,42 +291,89 @@ class _ReviewHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_body()
-            self._send_json(HTTPStatus.OK, save_annotation(self.app.review_path, event_id, payload))  # type: ignore[arg-type]
+            if suffix == "/annotation":
+                with self.app.mutation_lock:
+                    result = save_annotation(self.app.review_path, event_id, payload)  # type: ignore[arg-type]
+            else:
+                result = self.app.event_editor.update_bounds(event_id, payload)
+            self._send_json(HTTPStatus.OK, result)
+        except MediaExportError as exc:
+            self._error(HTTPStatus.UNPROCESSABLE_ENTITY, str(exc))
+        except EventConflictError as exc:
+            self._error(HTTPStatus.CONFLICT, str(exc))
         except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             self._error(HTTPStatus.BAD_REQUEST, str(exc))
 
     def do_POST(self) -> None:
         path = unquote(urlsplit(self.path).path)
-        if path != "/api/session/sync":
+        try:
+            if path == "/api/session/sync":
+                payload = self._read_body()
+                if not isinstance(payload, dict) or set(payload) != {"anchors", "injury_cutoff_s"}:
+                    raise ValueError("sinhronizacija zahteva ankere i presek povrede")
+                raw_anchors = payload["anchors"]
+                if not isinstance(raw_anchors, list) or len(raw_anchors) != 2:
+                    raise ValueError("potrebna su tačno dva ankera")
+                anchors = [AnchorPair.from_dict(value) for value in raw_anchors]
+                time_map = fit_time_map(anchors)
+                cutoff = payload["injury_cutoff_s"]
+                if isinstance(cutoff, bool) or not isinstance(cutoff, (int, float)) or cutoff <= 0:
+                    raise ValueError("presek povrede mora biti pozitivan broj")
+                with self.app.mutation_lock:
+                    review = _strict_load(self.app.review_path)
+                    if _sync_is_locked(review, self.app.session_dir):
+                        raise SyncLockedError(
+                            "Sinhronizacija je zaključana za uvezenu sesiju sa izvedenim "
+                            "medijima ili događajima; potreban je novi uvoz."
+                        )
+                    _review_session_for_sync(review, anchors, float(cutoff))
+                    review["anchors"] = [anchor.to_dict() for anchor in anchors]
+                    review["time_map"] = time_map.to_dict()
+                    review["injury_cutoff_s"] = float(cutoff)
+                    review["sync_locked"] = False
+                    _atomic_json(self.app.review_path, review)
+                    _write_report(self.app.review_path, review)
+                self._send_json(HTTPStatus.OK, review)
+            elif path == "/api/events":
+                result = self.app.event_editor.create(self._read_body())
+                self._send_json(HTTPStatus.CREATED, result)
+            elif path == "/api/events/merge":
+                result = self.app.event_editor.merge(self._read_body())
+                self._send_json(HTTPStatus.OK, result)
+            elif path.startswith("/api/events/") and path.endswith("/split"):
+                event_id = path[len("/api/events/"):-len("/split")]
+                if not event_id or "/" in event_id:
+                    raise ValueError("event ID nije validan")
+                result = self.app.event_editor.split(event_id, self._read_body())
+                self._send_json(HTTPStatus.OK, result)
+            else:
+                self._error(HTTPStatus.NOT_FOUND, "resurs nije pronađen")
+        except SyncLockedError as exc:
+            self._error(HTTPStatus.CONFLICT, str(exc))
+        except MediaExportError as exc:
+            self._error(HTTPStatus.UNPROCESSABLE_ENTITY, str(exc))
+        except EventConflictError as exc:
+            self._error(HTTPStatus.CONFLICT, str(exc))
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            self._error(HTTPStatus.BAD_REQUEST, str(exc))
+
+    def do_DELETE(self) -> None:
+        path = unquote(urlsplit(self.path).path)
+        prefix = "/api/events/"
+        event_id = path.removeprefix(prefix) if path.startswith(prefix) else ""
+        if not event_id or "/" in event_id:
             self._error(HTTPStatus.NOT_FOUND, "resurs nije pronađen")
             return
         try:
-            payload = self._read_body()
-            if not isinstance(payload, dict) or set(payload) != {"anchors", "injury_cutoff_s"}:
-                raise ValueError("sinhronizacija zahteva ankere i presek povrede")
-            raw_anchors = payload["anchors"]
-            if not isinstance(raw_anchors, list) or len(raw_anchors) != 2:
-                raise ValueError("potrebna su tačno dva ankera")
-            anchors = [AnchorPair.from_dict(value) for value in raw_anchors]
-            time_map = fit_time_map(anchors)
-            cutoff = payload["injury_cutoff_s"]
-            if isinstance(cutoff, bool) or not isinstance(cutoff, (int, float)) or cutoff <= 0:
-                raise ValueError("presek povrede mora biti pozitivan broj")
-            review = _strict_load(self.app.review_path)
-            injury_events = [
-                event for event in review.get("events", [])
-                if isinstance(event, dict) and _event_is_injury(event)
-            ]
-            if any(float(cutoff) > float(event.get("sony_end_s", cutoff)) for event in injury_events):
-                raise ValueError("presek povrede ne može biti posle povrednog događaja")
-            _review_session_for_sync(review, anchors, float(cutoff))
-            review["anchors"] = [anchor.to_dict() for anchor in anchors]
-            review["time_map"] = time_map.to_dict()
-            review["injury_cutoff_s"] = float(cutoff)
-            _atomic_json(self.app.review_path, review)
-            _write_report(self.app.review_path, review)
-            self._send_json(HTTPStatus.OK, review)
-        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            self._send_json(
+                HTTPStatus.OK,
+                self.app.event_editor.delete(event_id),
+            )
+        except MediaExportError as exc:
+            self._error(HTTPStatus.UNPROCESSABLE_ENTITY, str(exc))
+        except EventConflictError as exc:
+            self._error(HTTPStatus.CONFLICT, str(exc))
+        except (ValueError, TypeError) as exc:
             self._error(HTTPStatus.BAD_REQUEST, str(exc))
 
     def _serve_file(self, candidate: Path, root: Path, content_type: str | None = None) -> None:
