@@ -91,6 +91,46 @@ async function mediaSummary(page) {
   return media;
 }
 
+async function fillValidAssessmentDraft(page) {
+  await page.locator("input[name='visibility'][value='dovoljno_vidljivo']").locator("..").click();
+  await page.locator("#confirmed-technique").fill("Tai-otoshi");
+  await page.locator("input[name='trainer-score'][value='4']").locator("..").click();
+  await page.locator("#trainer-reason").fill("QA proverava samo dostupnost zaključavanja.");
+  await page.locator("#add-current-second").click();
+  assert.match(await page.locator("#citation-list").textContent(), /\d+\.\d{3} s/);
+}
+
+async function verifyUnsavedIdentityKeepsLockDisabled(browser, eventId) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await context.route("**/api/session", async (route) => {
+    const response = await route.fetch();
+    const review = await response.json();
+    delete review.participants;
+    await route.fulfill({ response, json: review });
+  });
+  const page = await context.newPage();
+  try {
+    await page.goto(`${baseUrl}/?qa=unsaved-identity`, {
+      waitUntil: "domcontentloaded",
+      timeout: 15000,
+    });
+    await page.waitForFunction(
+      () => document.querySelectorAll("#event-list button").length > 0,
+      null,
+      { timeout: 10000 },
+    );
+    await selectEventAndWaitForMedia(page, eventId);
+    await fillValidAssessmentDraft(page);
+    assert.equal(
+      await page.locator("#lock-assessment-button").isDisabled(),
+      true,
+      "a valid draft without a saved identity must remain locked",
+    );
+  } finally {
+    await context.close();
+  }
+}
+
 async function saveAndVerifyParticipants(page, eventId) {
   await page.locator("#trainer-name").fill(TRAINER_NAME);
   await page.locator("#wrestler-name").fill(WRESTLER_NAME);
@@ -115,12 +155,7 @@ async function saveAndVerifyParticipants(page, eventId) {
   await selectEventAndWaitForMedia(page, eventId);
   assert.equal(await page.locator("#lock-assessment-button").isDisabled(), true);
 
-  await page.locator("input[name='visibility'][value='dovoljno_vidljivo']").locator("..").click();
-  await page.locator("#confirmed-technique").fill("Tai-otoshi");
-  await page.locator("input[name='trainer-score'][value='4']").locator("..").click();
-  await page.locator("#trainer-reason").fill("QA proverava samo dostupnost zaključavanja.");
-  await page.locator("#add-current-second").click();
-  assert.match(await page.locator("#citation-list").textContent(), /\d+\.\d{3} s/);
+  await fillValidAssessmentDraft(page);
   assert.equal(await page.locator("#lock-assessment-button").isDisabled(), false);
 }
 
@@ -253,7 +288,16 @@ async function assertViewportLayout(browser, viewport, eventId) {
         })
         .filter((control) => control.visible);
       const overlaps = [];
+      const outsideViewport = [];
       for (let first = 0; first < visibleControls.length; first += 1) {
+        const control = visibleControls[first];
+        if (control.rect.left < -0.5 || control.rect.right > window.innerWidth + 0.5) {
+          outsideViewport.push({
+            control: control.id || control.name || control.tag,
+            left: control.rect.left,
+            right: control.rect.right,
+          });
+        }
         for (let second = first + 1; second < visibleControls.length; second += 1) {
           const a = visibleControls[first];
           const b = visibleControls[second];
@@ -266,6 +310,7 @@ async function assertViewportLayout(browser, viewport, eventId) {
         scrollWidth: document.documentElement.scrollWidth,
         viewportWidth: window.innerWidth,
         overlaps,
+        outsideViewport,
       };
     });
     assert.ok(
@@ -273,6 +318,11 @@ async function assertViewportLayout(browser, viewport, eventId) {
       `${viewport.width}px viewport has horizontal overflow: ${layout.scrollWidth}px`,
     );
     assert.deepEqual(layout.overlaps, [], `${viewport.width}px viewport has overlapping controls`);
+    assert.deepEqual(
+      layout.outsideViewport,
+      [],
+      `${viewport.width}px viewport has controls outside the viewport`,
+    );
     return { viewport, ...layout };
   } finally {
     await context.close();
@@ -297,6 +347,7 @@ async function main() {
     );
     await selectEventAndWaitForMedia(desktop, eventId);
     const media = await mediaSummary(desktop);
+    await verifyUnsavedIdentityKeepsLockDisabled(browser, eventId);
     await saveAndVerifyParticipants(desktop, eventId);
     const exports = await downloadAndVerifyExports(desktop, sessionDirArgument);
     const desktopLayout = await assertViewportLayout(browser, { width: 1440, height: 900 }, eventId);
@@ -307,12 +358,15 @@ async function main() {
       participants: { trainer_name: TRAINER_NAME, wrestler_name: WRESTLER_NAME },
       media,
       exports,
-      viewports: [desktopLayout, mobileLayout].map(({ viewport, scrollWidth, viewportWidth }) => ({
+      viewports: [desktopLayout, mobileLayout].map(({
+        viewport, scrollWidth, viewportWidth, outsideViewport,
+      }) => ({
         viewport,
         scrollWidth,
         viewportWidth,
         horizontalOverflow: false,
         overlappingControls: 0,
+        controlsOutsideViewport: outsideViewport.length,
       })),
     }, null, 2)}\n`);
   } finally {

@@ -27,7 +27,8 @@ class CoachAppStaticContractTests(unittest.TestCase):
             "Preuzmi audit (JSON)",
         ):
             self.assertIn(label, self.html)
-        self.assertEqual(self.html.count('maxlength="120"'), 3)
+        self.assertIn('id="trainer-name" type="text" maxlength="120"', self.html)
+        self.assertIn('id="wrestler-name" type="text" maxlength="120"', self.html)
 
     def test_session_participant_controls_link_clean_and_audit_json_exports(self):
         self.assertIn('href="/trener_dataset.json"', self.html)
