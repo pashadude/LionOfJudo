@@ -273,20 +273,37 @@ async function assertViewportLayout(browser, viewport, eventId) {
     );
     await selectEventAndWaitForMedia(page, eventId);
     const layout = await page.evaluate(() => {
-      const visibleControls = [...document.querySelectorAll("button, a, input, select, textarea")]
-        .map((element) => {
-          const style = getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          return {
-            tag: element.tagName,
-            id: element.id,
-            name: element.getAttribute("name"),
-            rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
-            visible: style.display !== "none" && style.visibility !== "hidden"
-              && rect.width > 4 && rect.height > 4 && Number(style.opacity) > 0,
-          };
-        })
-        .filter((control) => control.visible);
+      const isVisibleControl = (element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden"
+          && rect.width > 4 && rect.height > 4 && Number(style.opacity) > 0;
+      };
+      const describeControl = (element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          tag: element.tagName,
+          id: element.id,
+          name: element.getAttribute("name"),
+          label: element.textContent.trim().slice(0, 80),
+          rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+        };
+      };
+      const customInteractiveSelector = ".segmented-control label, .score-control label, canvas[data-metric]";
+      const visibleElements = [...document.querySelectorAll(
+        `button, a, input, select, textarea, ${customInteractiveSelector}`,
+      )]
+        .filter(isVisibleControl);
+      const visibleControls = visibleElements.map(describeControl);
+      const untrackedCustomControls = [
+        ...document.querySelectorAll(customInteractiveSelector),
+      ]
+        .filter(isVisibleControl)
+        .filter((element) => !visibleElements.includes(element))
+        .map(describeControl);
+      const customInteractiveControls = visibleElements.filter(
+        (element) => element.matches(customInteractiveSelector),
+      ).length;
       const overlaps = [];
       const outsideViewport = [];
       for (let first = 0; first < visibleControls.length; first += 1) {
@@ -311,6 +328,8 @@ async function assertViewportLayout(browser, viewport, eventId) {
         viewportWidth: window.innerWidth,
         overlaps,
         outsideViewport,
+        untrackedCustomControls,
+        customInteractiveControls,
       };
     });
     assert.ok(
@@ -322,6 +341,15 @@ async function assertViewportLayout(browser, viewport, eventId) {
       layout.outsideViewport,
       [],
       `${viewport.width}px viewport has controls outside the viewport`,
+    );
+    assert.deepEqual(
+      layout.untrackedCustomControls,
+      [],
+      `${viewport.width}px viewport has untracked custom interactive controls`,
+    );
+    assert.ok(
+      layout.customInteractiveControls > 0,
+      `${viewport.width}px viewport must check custom interactive controls`,
     );
     return { viewport, ...layout };
   } finally {
@@ -359,7 +387,7 @@ async function main() {
       media,
       exports,
       viewports: [desktopLayout, mobileLayout].map(({
-        viewport, scrollWidth, viewportWidth, outsideViewport,
+        viewport, scrollWidth, viewportWidth, outsideViewport, customInteractiveControls,
       }) => ({
         viewport,
         scrollWidth,
@@ -367,6 +395,7 @@ async function main() {
         horizontalOverflow: false,
         overlappingControls: 0,
         controlsOutsideViewport: outsideViewport.length,
+        customInteractiveControls,
       })),
     }, null, 2)}\n`);
   } finally {

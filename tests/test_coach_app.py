@@ -29,6 +29,7 @@ class CoachAppStaticContractTests(unittest.TestCase):
             self.assertIn(label, self.html)
         self.assertIn('id="trainer-name" type="text" maxlength="120"', self.html)
         self.assertIn('id="wrestler-name" type="text" maxlength="120"', self.html)
+        self.assertIn('id="confirmed-technique" type="text" maxlength="120"', self.html)
 
     def test_session_participant_controls_link_clean_and_audit_json_exports(self):
         self.assertIn('href="/trener_dataset.json"', self.html)
