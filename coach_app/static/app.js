@@ -211,13 +211,41 @@
       : "Nema citiranih trenutaka";
   }
 
-  function hasSavedParticipants(review = state.review) {
-    const participants = review?.participants;
+  function participantDraft() {
+    return {
+      trainer_name: $("#trainer-name").value.trim(),
+      wrestler_name: $("#wrestler-name").value.trim(),
+    };
+  }
+
+  function participantDraftIsValid() {
+    const participants = participantDraft();
+    return Boolean(participants.trainer_name && participants.wrestler_name);
+  }
+
+  function participantDraftMatchesSaved(participants) {
+    const saved = state.review?.participants;
     return Boolean(
-      participants
-      && String(participants.trainer_name || "").trim()
-      && String(participants.wrestler_name || "").trim(),
+      saved
+      && saved.trainer_name === participants.trainer_name
+      && saved.wrestler_name === participants.wrestler_name,
     );
+  }
+
+  async function saveParticipantDraft({ force = false } = {}) {
+    const participants = participantDraft();
+    if (!participants.trainer_name || !participants.wrestler_name) {
+      throw new Error("Unesite ime trenera i ime rvača");
+    }
+    if (!force && participantDraftMatchesSaved(participants)) return state.review.participants;
+    const response = await fetch("/api/session/participants", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(participants),
+    });
+    const result = await readResult(response, "Podaci sesije nisu sačuvani");
+    state.review.participants = result.participants;
+    return result.participants;
   }
 
   function assessmentDraftIsValid() {
@@ -230,8 +258,15 @@
   }
 
   function updateLockAssessmentAvailability(disabled) {
+    const selected = state.selected;
+    const lockedBeforeReveal = selected
+      && hasPreAiAssessment(selected)
+      && !revealedAiEvaluation(selected);
     $("#lock-assessment-button").disabled = disabled
-      || !hasSavedParticipants()
+      || !selected
+      || injury(selected)
+      || lockedBeforeReveal
+      || !participantDraftIsValid()
       || !assessmentDraftIsValid();
   }
 
@@ -753,26 +788,14 @@
   $("#trainer-assessment-form").addEventListener("change", () => {
     updateLockAssessmentAvailability(false);
   });
+  $("#session-participants-form").addEventListener("input", () => {
+    updateLockAssessmentAvailability(false);
+  });
 
   $("#session-participants-form").addEventListener("submit", async (formEvent) => {
     formEvent.preventDefault();
-    const trainerName = $("#trainer-name").value.trim();
-    const wrestlerName = $("#wrestler-name").value.trim();
-    if (!trainerName || !wrestlerName) {
-      status("Unesite ime trenera i ime rvača", true);
-      return;
-    }
     try {
-      const response = await fetch("/api/session/participants", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trainer_name: trainerName,
-          wrestler_name: wrestlerName,
-        }),
-      });
-      const result = await readResult(response, "Podaci sesije nisu sačuvani");
-      state.review.participants = result.participants;
+      await saveParticipantDraft({ force: true });
       if (state.selected) {
         const lockedBeforeReveal = hasPreAiAssessment(state.selected)
           && !revealedAiEvaluation(state.selected);
@@ -789,15 +812,23 @@
     const selected = state.selected;
     if (!selected || injury(selected)) return;
     try {
+      const participants = participantDraft();
+      if (!participants.trainer_name || !participants.wrestler_name) {
+        throw new Error("Unesite ime trenera i ime rvača");
+      }
       const response = await fetch(
         `/api/events/${encodeURIComponent(selected.event_id)}/trainer-assessments`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(trainerAssessmentPayload()),
+          body: JSON.stringify({
+            participants,
+            assessment: trainerAssessmentPayload(),
+          }),
         },
       );
       const result = await readResult(response, "Procena trenera nije sačuvana");
+      state.review.participants = result.participants;
       replaceSelectedEvent(result.event);
       status(revealedAiEvaluation(result.event)
         ? "Korekcija trenera je sačuvana"

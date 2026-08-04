@@ -14,7 +14,8 @@ if (!baseUrl || !sessionDirArgument || process.argv.length !== 4) {
   );
 }
 
-const TRAINER_NAME = "Demo trener";
+const TRAINER_NAME = "Uros Kostadinovic";
+const EDITED_TRAINER_NAME = "Uros Kostadinovic QA";
 const WRESTLER_NAME = "Dusan";
 const AI_ONLY_KEYS = new Set([
   "ai_procene",
@@ -132,6 +133,11 @@ async function verifyUnsavedIdentityKeepsLockDisabled(browser, eventId) {
 }
 
 async function saveAndVerifyParticipants(page, eventId) {
+  const beforeSession = await (await page.request.get(`${baseUrl}/api/session`)).json();
+  assert.equal(beforeSession.participants.trainer_name, TRAINER_NAME);
+  assert.equal(beforeSession.participants.wrestler_name, WRESTLER_NAME);
+  assert.equal(await page.locator("#trainer-name").inputValue(), TRAINER_NAME);
+  assert.equal(await page.locator("#wrestler-name").inputValue(), WRESTLER_NAME);
   await page.locator("#trainer-name").fill(TRAINER_NAME);
   await page.locator("#wrestler-name").fill(WRESTLER_NAME);
   const saved = page.waitForResponse(
@@ -139,10 +145,14 @@ async function saveAndVerifyParticipants(page, eventId) {
       && response.request().method() === "PUT",
   );
   await page.locator("#save-participants-button").click();
-  assert.equal((await saved).status(), 200, "participant save must succeed");
-
-  // Saving an identity alone must not make a lockable assessment.
-  assert.equal(await page.locator("#lock-assessment-button").isDisabled(), true);
+  const savedResponse = await saved;
+  assert.equal(savedResponse.status(), 200, "participant save must succeed");
+  const savedBody = await savedResponse.json();
+  assert.notEqual(
+    savedBody.participants.updated_at,
+    beforeSession.participants.updated_at,
+    "explicit Save must refresh the persisted participant timestamp",
+  );
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(
@@ -153,10 +163,169 @@ async function saveAndVerifyParticipants(page, eventId) {
   assert.equal(await page.locator("#trainer-name").inputValue(), TRAINER_NAME);
   assert.equal(await page.locator("#wrestler-name").inputValue(), WRESTLER_NAME);
   await selectEventAndWaitForMedia(page, eventId);
-  assert.equal(await page.locator("#lock-assessment-button").isDisabled(), true);
+}
 
-  await fillValidAssessmentDraft(page);
-  assert.equal(await page.locator("#lock-assessment-button").isDisabled(), false);
+async function verifyEditedIdentityIsSavedBeforeAssessment(browser, initialReview, eventId) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const requestOrder = [];
+  let participantPutCount = 0;
+  let assessmentRequestBody = null;
+  let assessmentHandledResolve;
+  const assessmentHandled = new Promise((resolve) => {
+    assessmentHandledResolve = resolve;
+  });
+  const event = structuredClone(
+    initialReview.events.find((item) => item.event_id === eventId),
+  );
+  event.trener_procene = [];
+  event.aktivna_trener_revizija = null;
+
+  await context.route("**/api/session", async (route) => {
+    const response = await route.fetch();
+    const review = await response.json();
+    review.participants = {
+      trainer_name: TRAINER_NAME,
+      wrestler_name: WRESTLER_NAME,
+      updated_at: "2026-08-03T00:00:00+00:00",
+    };
+    review.events = review.events.map((item) => (
+      item.event_id === eventId ? structuredClone(event) : item
+    ));
+    await route.fulfill({ response, json: review });
+  });
+  await context.route("**/api/session/participants", async (route) => {
+    participantPutCount += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        participants: {
+          ...route.request().postDataJSON(),
+          updated_at: "2026-08-03T00:00:01+00:00",
+        },
+      }),
+    });
+  });
+  await context.route("**/api/events/*/trainer-assessments", async (route) => {
+    requestOrder.push("assessment");
+    assessmentRequestBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        event,
+        assessment: {
+          trainer_name: EDITED_TRAINER_NAME,
+          wrestler_name: WRESTLER_NAME,
+        },
+        participants: {
+          trainer_name: EDITED_TRAINER_NAME,
+          wrestler_name: WRESTLER_NAME,
+          updated_at: "2026-08-03T00:00:01+00:00",
+        },
+      }),
+    });
+    assessmentHandledResolve();
+  });
+
+  const page = await context.newPage();
+  try {
+    await page.goto(`${baseUrl}/?qa=edited-identity`, {
+      waitUntil: "domcontentloaded",
+      timeout: 15000,
+    });
+    await page.waitForFunction(
+      () => document.querySelectorAll("#event-list button").length > 0,
+      null,
+      { timeout: 10000 },
+    );
+    await selectEventAndWaitForMedia(page, eventId);
+    await page.locator("#trainer-name").fill(EDITED_TRAINER_NAME);
+    await fillValidAssessmentDraft(page);
+    assert.equal(await page.locator("#lock-assessment-button").isDisabled(), false);
+    await page.locator("#lock-assessment-button").click();
+    await Promise.race([
+      assessmentHandled,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error("atomic assessment POST was not observed within 5 seconds")),
+        5000,
+      )),
+    ]);
+    assert.deepEqual(
+      requestOrder,
+      ["assessment"],
+      "participant identity and assessment must use one atomic request",
+    );
+    assert.equal(participantPutCount, 0, "assessment locking must not issue a separate participant PUT");
+    assert.deepEqual(assessmentRequestBody.participants, {
+      trainer_name: EDITED_TRAINER_NAME,
+      wrestler_name: WRESTLER_NAME,
+    });
+    assert.equal(assessmentRequestBody.assessment.potvrdena_tehnika, "Tai-otoshi");
+  } finally {
+    await context.close();
+  }
+}
+
+async function verifyIdentityEditCannotUnlockLockedRound(browser, initialReview, eventId) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const event = structuredClone(
+    initialReview.events.find((item) => item.event_id === eventId),
+  );
+  event.trener_procene = [{
+    revizija: 1,
+    faza: "pre_ai",
+    event_revision: event.event_revision,
+    analysis_fingerprint: event.analysis_fingerprint,
+    trainer_name: TRAINER_NAME,
+    wrestler_name: WRESTLER_NAME,
+    status_vidljivosti: "dovoljno_vidljivo",
+    potvrdena_tehnika: "Tai-otoshi",
+    ocena: 4,
+    razlog: "Zaključana QA procena.",
+    citirani_sony_trenuci_s: [event.sony_start_s],
+    zakljucano_u: "2026-08-03T00:00:00+00:00",
+  }];
+  event.aktivna_trener_revizija = 1;
+  delete event.aktivni_duel;
+  delete event.ai_procene;
+
+  await context.route("**/api/session", async (route) => {
+    const response = await route.fetch();
+    const review = await response.json();
+    review.participants = {
+      trainer_name: TRAINER_NAME,
+      wrestler_name: WRESTLER_NAME,
+      updated_at: "2026-08-03T00:00:00+00:00",
+    };
+    review.events = review.events.map((item) => (
+      item.event_id === eventId ? structuredClone(event) : item
+    ));
+    await route.fulfill({ response, json: review });
+  });
+
+  const page = await context.newPage();
+  try {
+    await page.goto(`${baseUrl}/?qa=locked-round-identity`, {
+      waitUntil: "domcontentloaded",
+      timeout: 15000,
+    });
+    await page.waitForFunction(
+      () => document.querySelectorAll("#event-list button").length > 0,
+      null,
+      { timeout: 10000 },
+    );
+    await selectEventAndWaitForMedia(page, eventId);
+    assert.equal(await page.locator("#lock-assessment-button").isDisabled(), true);
+    await page.locator("#trainer-name").fill(EDITED_TRAINER_NAME);
+    assert.equal(
+      await page.locator("#lock-assessment-button").isDisabled(),
+      true,
+      "editing identity must not unlock an already locked pre_ai round",
+    );
+  } finally {
+    await context.close();
+  }
 }
 
 function assertNoAiKeys(value, location = "dataset") {
@@ -376,6 +545,8 @@ async function main() {
     await selectEventAndWaitForMedia(desktop, eventId);
     const media = await mediaSummary(desktop);
     await verifyUnsavedIdentityKeepsLockDisabled(browser, eventId);
+    await verifyEditedIdentityIsSavedBeforeAssessment(browser, initialReview, eventId);
+    await verifyIdentityEditCannotUnlockLockedRound(browser, initialReview, eventId);
     await saveAndVerifyParticipants(desktop, eventId);
     const exports = await downloadAndVerifyExports(desktop, sessionDirArgument);
     const desktopLayout = await assertViewportLayout(browser, { width: 1440, height: 900 }, eventId);

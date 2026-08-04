@@ -140,6 +140,31 @@ class CoachTrainerAiTests(unittest.TestCase):
         self.assertEqual(saved["participants"]["trainer_name"], "Marko Markovic")
         self.assertEqual(locked["assessment"]["wrestler_name"], "Dusan")
 
+    def test_atomic_participant_assessment_lock_snapshots_bundled_identity(self):
+        result = self.service.lock_assessment_with_participants(
+            "e-001",
+            {
+                "participants": {
+                    "trainer_name": "Uros Kostadinovic",
+                    "wrestler_name": "Dusan",
+                },
+                "assessment": self.visible_assessment(),
+            },
+        )
+
+        self.assertEqual(result["assessment"]["trainer_name"], "Uros Kostadinovic")
+        snapshot = self.service.store.resolve_current()
+        dataset = json.loads(snapshot.dataset_path.read_text(encoding="utf-8"))
+        audit = json.loads(snapshot.audit_path.read_text(encoding="utf-8"))
+        self.assertEqual(dataset["participants"]["trainer_name"], "Uros Kostadinovic")
+        self.assertEqual(
+            next(
+                row for row in audit["assessments"]
+                if row.get("assessment_phase") == "pre_ai"
+            )["trainer_name"],
+            "Uros Kostadinovic",
+        )
+
     def test_later_participant_edit_does_not_rewrite_locked_identity(self):
         self.service.save_participants({"trainer_name": "Marko", "wrestler_name": "Dusan"})
         first = self.service.lock_assessment("e-001", self.visible_assessment())["assessment"]
@@ -501,6 +526,26 @@ class CoachTrainerAiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(feedback["assessment"]["odnos"], "slazem_se")
+
+    def test_http_atomic_lock_accepts_participants_and_assessment_together(self):
+        server = self.start_server()
+
+        status, locked = self.read_json(
+            server.base_url + "/api/events/e-001/trainer-assessments",
+            method="POST",
+            payload={
+                "participants": {
+                    "trainer_name": "Uros Kostadinovic",
+                    "wrestler_name": "Dusan",
+                },
+                "assessment": self.visible_assessment(),
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(locked["assessment"]["trainer_name"], "Uros Kostadinovic")
+        _, session = self.read_json(server.base_url + "/api/session")
+        self.assertEqual(session["participants"]["trainer_name"], "Uros Kostadinovic")
 
     def test_http_reports_hide_ai_until_reveal_and_then_include_trace_data(self):
         server = self.start_server()

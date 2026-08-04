@@ -479,14 +479,25 @@ class _ReviewHandler(BaseHTTPRequestHandler):
                 event_id = path[len("/api/events/"):-len("/trainer-assessments")]
                 if not event_id or "/" in event_id:
                     raise ValueError("event ID nije validan")
-                internal = self.app.trainer_ai_service.lock_assessment(
-                    event_id, self._read_body()
-                )
+                payload = self._read_body()
+                if isinstance(payload, Mapping) and set(payload) == {
+                    "participants", "assessment"
+                }:
+                    internal = (
+                        self.app.trainer_ai_service.lock_assessment_with_participants(
+                            event_id, payload
+                        )
+                    )
+                else:
+                    internal = self.app.trainer_ai_service.lock_assessment(
+                        event_id, payload
+                    )
                 self._send_json(
                     HTTPStatus.OK,
                     {
                         "event": self.app.trainer_ai_service.public_event(event_id),
                         "assessment": internal["assessment"],
+                        "participants": internal["participants"],
                     },
                 )
             elif path.startswith("/api/events/") and path.endswith("/ai-reveal"):

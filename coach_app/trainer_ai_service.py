@@ -31,6 +31,7 @@ ASSESSMENT_FIELDS = {
 FEEDBACK_FIELDS = {"odnos", "razlog", "procene_dokaza"}
 DRAFT_FIELDS = {"potvrdena_tehnika", "ocena", "napomena"}
 PARTICIPANT_INPUT_FIELDS = {"trainer_name", "wrestler_name"}
+ATOMIC_LOCK_FIELDS = {"participants", "assessment"}
 AI_RELATIONS = {"slazem_se", "delimicno", "ne_slazem_se"}
 EVIDENCE_RELATIONS = {"prihvatam", "nepotpun", "osporavam"}
 
@@ -56,58 +57,95 @@ class TrainerAiService:
     def lock_assessment(self, event_id: str, payload: object) -> dict[str, Any]:
         with self.mutation_lock:
             review = self.load_review()
-            event = self._normal_event(review, event_id)
             if review.get("participants") is None:
                 raise ValueError("ime trenera i ime rvača moraju biti sačuvani")
             participants = validate_participants(review.get("participants"), required=True)
             assert participants is not None
-            values = self._validate_assessment_payload(event, payload)
-            ai = active_ai_evaluation(event)
-            if ai is None:
-                raise ValueError("aktivna AI procena ne postoji")
-            revealed = ai.get("ai_otkriven_u") is not None
-            current_round = [
-                row
-                for row in event.get("trener_procene", [])
-                if row.get("event_revision") == event["event_revision"]
-                and row.get("analysis_fingerprint") == event["analysis_fingerprint"]
-            ]
-            if not revealed and current_round:
-                raise ValueError("pre_ai procena je već zaključana")
-            phase = "post_ai_korekcija" if revealed else "pre_ai"
-            all_revisions = [
-                row.get("revizija")
-                for candidate in review.get("events", [])
-                if isinstance(candidate, Mapping)
-                for row in candidate.get("trener_procene", [])
-                if isinstance(row, Mapping) and isinstance(row.get("revizija"), int)
-            ]
-            assessment = {
-                "revizija": max(all_revisions, default=0) + 1,
-                "faza": phase,
+            return self._lock_assessment_in_review(
+                review, event_id, payload, participants
+            )
+
+    def lock_assessment_with_participants(
+        self, event_id: str, payload: object
+    ) -> dict[str, Any]:
+        with self.mutation_lock:
+            if not isinstance(payload, Mapping) or set(payload) != ATOMIC_LOCK_FIELDS:
+                raise ValueError("atomsko zaključavanje zahteva participants i assessment")
+            raw_participants = payload["participants"]
+            if (
+                not isinstance(raw_participants, Mapping)
+                or set(raw_participants) != PARTICIPANT_INPUT_FIELDS
+            ):
+                raise ValueError("podaci učesnika nemaju tačna obavezna polja")
+            participants = validate_participants(
+                {**raw_participants, "updated_at": self._now_iso()}, required=True
+            )
+            assert participants is not None
+            review = self.load_review()
+            review["participants"] = participants
+            return self._lock_assessment_in_review(
+                review, event_id, payload["assessment"], participants
+            )
+
+    def _lock_assessment_in_review(
+        self,
+        review: dict[str, Any],
+        event_id: str,
+        payload: object,
+        participants: Mapping[str, str],
+    ) -> dict[str, Any]:
+        event = self._normal_event(review, event_id)
+        values = self._validate_assessment_payload(event, payload)
+        ai = active_ai_evaluation(event)
+        if ai is None:
+            raise ValueError("aktivna AI procena ne postoji")
+        revealed = ai.get("ai_otkriven_u") is not None
+        current_round = [
+            row
+            for row in event.get("trener_procene", [])
+            if row.get("event_revision") == event["event_revision"]
+            and row.get("analysis_fingerprint") == event["analysis_fingerprint"]
+        ]
+        if not revealed and current_round:
+            raise ValueError("pre_ai procena je već zaključana")
+        phase = "post_ai_korekcija" if revealed else "pre_ai"
+        all_revisions = [
+            row.get("revizija")
+            for candidate in review.get("events", [])
+            if isinstance(candidate, Mapping)
+            for row in candidate.get("trener_procene", [])
+            if isinstance(row, Mapping) and isinstance(row.get("revizija"), int)
+        ]
+        assessment = {
+            "revizija": max(all_revisions, default=0) + 1,
+            "faza": phase,
+            "event_revision": event["event_revision"],
+            "analysis_fingerprint": event["analysis_fingerprint"],
+            "trainer_name": participants["trainer_name"],
+            "wrestler_name": participants["wrestler_name"],
+            **values,
+            "zakljucano_u": self._now_iso(),
+        }
+        event["trener_procene"].append(assessment)
+        event["aktivna_trener_revizija"] = assessment["revizija"]
+        event["status"] = "trener"
+        event["potvrdena_tehnika"] = assessment["potvrdena_tehnika"]
+        event["ocena"] = assessment["ocena"]
+        if revealed:
+            event["aktivni_duel"] = {
                 "event_revision": event["event_revision"],
                 "analysis_fingerprint": event["analysis_fingerprint"],
-                "trainer_name": participants["trainer_name"],
-                "wrestler_name": participants["wrestler_name"],
-                **values,
-                "zakljucano_u": self._now_iso(),
+                "trener_revizija": assessment["revizija"],
+                "evaluator_id": ai["evaluator_id"],
             }
-            event["trener_procene"].append(assessment)
-            event["aktivna_trener_revizija"] = assessment["revizija"]
-            event["status"] = "trener"
-            event["potvrdena_tehnika"] = assessment["potvrdena_tehnika"]
-            event["ocena"] = assessment["ocena"]
-            if revealed:
-                event["aktivni_duel"] = {
-                    "event_revision": event["event_revision"],
-                    "analysis_fingerprint": event["analysis_fingerprint"],
-                    "trener_revizija": assessment["revizija"],
-                    "evaluator_id": ai["evaluator_id"],
-                }
-            if review.get("version", 1) >= 3:
-                validate_trainer_ai_event(event)
-            self._activate(review)
-            return {"event": copy.deepcopy(event), "assessment": copy.deepcopy(assessment)}
+        if review.get("version", 1) >= 3:
+            validate_trainer_ai_event(event)
+        self._activate(review)
+        return {
+            "event": copy.deepcopy(event),
+            "assessment": copy.deepcopy(assessment),
+            "participants": copy.deepcopy(dict(participants)),
+        }
 
     def save_participants(self, payload: object) -> dict[str, Any]:
         with self.mutation_lock:

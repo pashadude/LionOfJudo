@@ -38,8 +38,9 @@ class CoachAppStaticContractTests(unittest.TestCase):
     def test_client_saves_participants_through_the_session_endpoint(self):
         self.assertIn("/api/session/participants", self.javascript)
         self.assertIn('method: "PUT"', self.javascript)
-        self.assertIn("trainer_name: trainerName", self.javascript)
-        self.assertIn("wrestler_name: wrestlerName", self.javascript)
+        self.assertIn("body: JSON.stringify(participants)", self.javascript)
+        self.assertIn("await saveParticipantDraft({ force: true })", self.javascript)
+        self.assertIn("assessment: trainerAssessmentPayload()", self.javascript)
 
     def test_session_identity_layout_collapses_to_one_column_on_narrow_screens(self):
         self.assertIn(".session-identity-grid", self.styles)
