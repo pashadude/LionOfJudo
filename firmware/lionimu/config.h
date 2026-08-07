@@ -4,10 +4,19 @@
 #define UNIT_ID        0            // 0 = chest, 1 = hip
 #define UNIT_NAME      "chest"      // "chest" -> lion-chest.local
 
-// ---- Home WiFi (download mode) ----
-// Add the dojo/hAP-lite SSID here later if you ever want at-dojo download.
+// ---- WiFi (download mode) ----
+// Keep real credentials in the git-ignored secrets.h. A clean checkout still
+// compiles with placeholders, but will enter logging mode because that network
+// is not expected to exist.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+#ifndef HOME_SSID
 #define HOME_SSID      "YOUR_HOME_WIFI"
+#endif
+#ifndef HOME_PASS
 #define HOME_PASS      "YOUR_HOME_PASSWORD"
+#endif
 #define WIFI_SCAN_TIMEOUT_MS  8000
 
 // ---- Sampling ----
@@ -27,6 +36,9 @@
 // ---- Battery ----
 #define BATT_DIVIDER     2.0f       // 100k/100k
 #define BATT_LOW_V       3.30f      // close log + red blink below this
+#ifndef BENCH_USB_POWER
+#define BENCH_USB_POWER  0          // 1 only for tethered/power-bank bench use
+#endif
 
 // ---- Logging ----
 #define LOG_DIR          "/logs"

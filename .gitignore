@@ -10,3 +10,4 @@ models/*.joblib
 models/technique_labels.json
 dataset/
 eval_set/
+firmware/lionimu/secrets.h

@@ -33,6 +33,7 @@
 #include <Wire.h>
 
 #include "config.h"
+#include "battery_policy.h"
 
 // ---- MPU-6050 registers (same map as pico_unified_controller.py) ----
 #define MPU_ADDR        0x68
@@ -199,7 +200,8 @@ static void logSample() {
 
   // battery check every ~5s
   if (sampleCount % (SAMPLE_RATE_HZ * 5) == 0) {
-    if (batteryVolts() < BATT_LOW_V) {
+    if (shouldStopForLowBattery(batteryVolts(), BATT_LOW_V,
+                                !BENCH_USB_POWER)) {
       stopLogging();
       while (true) {              // red blink until power-off
         ledColor(255, 0, 0); delay(300);
@@ -299,6 +301,9 @@ static void loggingMode() {
 
 void setup() {
   Serial.begin(115200);
+#if BENCH_USB_POWER
+  Serial.println("BENCH USB POWER: battery cutoff disabled");
+#endif
   led.begin();
   ledColor(20, 20, 20);
   analogSetPinAttenuation(PIN_BATTERY_ADC, ADC_11db);
