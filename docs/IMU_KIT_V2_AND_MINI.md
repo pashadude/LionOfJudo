@@ -54,6 +54,16 @@ for this board:
 | B | Low-dropout 3.3 V regulator module (AP2112K / ME6211 / RT9080 class, at least 500 mA) from the cell to the `3V3` pin, nothing on `5V`. | Fewer losses. Never plug USB while the battery is switched on. |
 | C | Change the board (Part 2). | The XIAO's battery input does not pass through this kind of regulator. |
 
+**Finding the boost module (option A).** It is a bare board about
+11 × 10 mm with three pads (`IN+`/`VIN`, `GND`, `OUT+`/`5V`), sold in packs
+of 5–10. Search terms: `0.9-5V to 5V 600mA mini boost module`,
+`DC-DC step up 3.7V to 5V mini`, `1S lithium 5V booster board`. The same item
+is on Temu, AliExpress and Amazon. Better-documented equivalents are the
+Pololu `U1V10F5` and the Adafruit `MiniBoost 5V`. Check before buying:
+fixed 5 V output (no adjustment screw), at least 500 mA, no USB-A socket (or
+desolder it). Avoid power-bank boards (IP5306 and similar): they switch off
+when the load is small, which this logger is.
+
 Never connect the cell directly to `3V3`: a full cell is 4.2 V and the chip's
 limit is 3.6 V.
 
@@ -104,12 +114,12 @@ volume, one cell, no external charger, no harness.
 |---|------|------|-------|
 | 1 | **XIAO ESP32-S3 Plus** (16 MB flash) | about 21 × 18 mm | Has a LiPo charger and battery pads on the board, so the cell connects directly and charges over USB-C. **Verify** on the listing: "Plus", 16 MB flash, and that it is the XIAO form factor with `BAT+`/`BAT-` pads on the back. |
 | 2 | **GY-521 (MPU6050)** | 21 × 16 mm | Same as now, so no firmware change. Do not fit the header strip. |
-| 3 | **One protected 1S LiPo of about 500–600 mAh** (for example 602030 or 552535), rated for at least 1 A | about 30 × 20 × 6 mm | Sized up because one 250 mAh cell was not enough on the current build. Must show a protection PCB. Loose leads solder to the XIAO pads. Add the 470 µF capacitor from P1b across `BAT+`/`BAT−`. Whether one cell is enough on this board is untested; if it is not, use the same permanent two-cell pack as in P1. |
+| 3 | **One protected 1S LiPo 602535** (about 500–600 mAh), rated for at least 1 A | 35 × 25 × 6 mm plus about 2.5 mm for the protection PCB | Sized up because one 250 mAh cell was not enough on the current build. Must show a protection PCB. Loose leads solder to the XIAO pads. Add a 470 µF capacitor across `BAT+`/`BAT−`. Whether one cell is enough on this board is untested. |
 | 4 | **Slide switch SS12D00** or similar, 3-pin | about 9 × 4 mm | In the battery positive lead. |
 | 5 | 2 × 100 kΩ resistors, 1 × 100 nF capacitor | — | Battery divider, same as now. |
 | 6 | Polyfuse about 500 mA | — | In series with battery positive. |
-| 7 | Perfboard offcut about 22 × 40 mm, 30 AWG silicone wire, kapton tape, heat-shrink | — | Carrier for the two boards. |
-| 8 | Small rigid plastic box, inner size about 45 × 25 × 12 mm | — | Dry-fit before choosing; see 2.5. |
+| 7 | Perfboard cut to 44 × 26 mm, 30 AWG silicone wire, kapton tape, heat-shrink | — | Carrier for the two boards. |
+| 8 | Rigid plastic box, **inside at least 46 × 30 × 15 mm** | outside 49 × 33 × 18 mm with 1.5 mm walls | A 3D-printed box to the drawing is the reliable route; a bought box needs these inside dimensions or slightly more. Dry-fit before closing; see 2.5. |
 | 9 | Tactile button (optional) | 6 × 6 mm | STOP on GPIO7. |
 
 **Why the XIAO and not a SuperMini.** The common ESP32-S3 SuperMini carries
@@ -170,28 +180,35 @@ I have not written this LED variant, because I cannot compile or test it
 here. It is a small change, and I can add it as a `BOARD_XIAO_S3` option in
 `config.h` if you want it prepared before the parts arrive.
 
-### 2.5 Layout
+### 2.5 Layout and dimensions
 
-```
-side view (not to scale)
+![Mini capsule design drawing](mini/mini_capsule_v0.1.png)
 
-  ┌───────────────────────────────────────────┐  lid
-  │  [ XIAO ]──perfboard──[ GY-521 ]          │  boards, parts facing up
-  │  ═══════════════════════════════════      │  perfboard on 2 nylon standoffs
-  │  ─────────── kapton / thin plastic ────── │  insulating divider
-  │  [        LiPo, lying flat          ]     │  not compressed by the lid
-  └───────────────────────────────────────────┘  floor → silicone pad → body
-        USB-C at one short end        switch at the other
-```
+Drawing: `docs/mini/mini_capsule_v0.1.png` (vector source `.svg` beside it).
 
-- Footprint is set by the perfboard, about 22 × 40 mm, with the cell
-  underneath. Expected outer size is around 48 × 28 × 14 mm, against the
-  64 × 44 × 20 mm candidate in the brief. This is an estimate until a dry fit.
+| | Size |
+|---|---|
+| **Outside** | **49 × 33 × 18 mm**, about 29 cm³ |
+| Inside cavity | 46 × 30 × 15 mm |
+| Current candidate, for comparison | 64 × 44 × 20 mm, about 56 cm³ |
+| Estimated mass | 25–30 g |
+
+These come from nominal part sizes and 1.5 mm walls. They are not confirmed
+by a dry fit, and the mass is an estimate.
+
+- Two layers: the cell lies flat on the floor; the perfboard with both modules
+  sits above it on three nylon M2 standoffs. The standoffs stand in a 4 mm
+  strip beside the cell and in the free space past its end, so nothing presses
+  on the pouch.
+- Height stack: floor 1.5, cell 6.0, insulating sheet 0.5, solder-side
+  clearance 1.0, perfboard 1.6, modules 4.5 (the USB-C socket is the tallest
+  part), lid clearance 1.4, lid 1.5.
 - Trim every solder tail on the underside flush and cover the underside with
   kapton before the cell goes in. Nothing sharp may face the pouch.
-- Keep the XIAO's antenna end at the edge of the box, away from the cell.
-- One USB-C cutout and one LED window. The switch sits recessed so a grip
-  cannot flip it.
+- One USB-C cutout at one short end, one LED window, and the switch recessed
+  at the other end so a grip cannot flip it.
+- The earlier estimate in this document (48 × 28 × 14 mm) assumed a 250 mAh
+  cell and no room for standoffs; this drawing replaces it.
 
 ### 2.6 Bring-up order
 
