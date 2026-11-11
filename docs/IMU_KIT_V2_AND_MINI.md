@@ -35,6 +35,28 @@ a resistor branch, battery fed into `5VIN`, optional STOP switch on GPIO7.
 | P5 | **Switch in the positive lead, divider top on the switched side.** | Then OFF removes power from everything including the divider, and the "which wire does POWER break" uncertainty in the guide disappears for the next unit. |
 | P6 | **Add a small series fuse or polyfuse (about 500 mA) at the battery connector.** | Cheap protection against a harness short inside a closed box. |
 
+### 1.1a Update after the component-side photo (IMG_2564)
+
+The 3.3 V regulator on this board is in a SOT-223 package (three legs and a
+large tab). The marking is not readable in the photo, but on this board style
+that package is normally an AMS1117-3.3, which needs roughly 1 V more at its
+input than it delivers. With a LiPo (3.0–4.2 V) on the `5V` pin the chip would
+get about 2.6–3.1 V, at or below its minimum, so the board fails to start on
+one cell and is marginal on two. **Confirm by measurement:** battery connected,
+switch ON, DCV 20, read `3V3`–GND. Below about 3.0 V confirms it.
+
+If confirmed, the capacitor and the second cell do not fix the cause. Options
+for this board:
+
+| Option | What | Trade-off |
+|---|---|---|
+| A (simplest) | Fixed-output **5 V boost module** between switch and `5V` pin (search "1S lithium 3.7V to 5V boost module", at least 500 mA; avoid adjustable ones). | One extra small board, some loss of runtime. Take the battery divider from the cell side, before the booster. |
+| B | Low-dropout 3.3 V regulator module (AP2112K / ME6211 / RT9080 class, at least 500 mA) from the cell to the `3V3` pin, nothing on `5V`. | Fewer losses. Never plug USB while the battery is switched on. |
+| C | Change the board (Part 2). | The XIAO's battery input does not pass through this kind of regulator. |
+
+Never connect the cell directly to `3V3`: a full cell is 4.2 V and the chip's
+limit is 3.6 V.
+
 ### 1.2 Sensor and mechanics
 
 | # | Change | Why |
