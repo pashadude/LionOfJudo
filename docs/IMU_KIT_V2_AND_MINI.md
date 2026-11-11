@@ -27,7 +27,8 @@ a resistor branch, battery fed into `5VIN`, optional STOP switch on GPIO7.
 
 | # | Change | Why |
 |---|--------|-----|
-| P1 | **One protected cell instead of two pouches in parallel.** | Two cells joined in parallel exchange current whenever their voltages differ (after separate charging, or as they age unevenly). The design brief already specifies one protected 502030 cell; the built unit has drifted from it. If you keep two, they must be the same model and age, stay permanently joined, and be charged as one pack. |
+| P1 | **Keep the two cells in parallel, but build them as one permanent pack** (updated 2026-11-11: one cell was tried and was not enough). Same model and batch; measure both before joining and join only if they are within about 0.05 V; never separate them again; charge them together as one pack. Set the external charger for the combined capacity (for 2 × 250 mAh, Rprog 5 kΩ ≈ 250 mA is right). | Cells joined at different voltages push current into each other. The likely reason one cell fails is peak current, not capacity: the firmware tries WiFi for 8 s at every boot, which draws short bursts of several hundred mA, and a small protected pouch sags under that, on top of the regulator drop in P3. Two cells halve the sag. The alternative with the same effect is **one larger cell** (about 500–1000 mAh, rated for at least 1 A), which is simpler to charge and protect. |
+| P1b | **Add a 470–1000 µF low-ESR capacitor across `5VIN` and GND**, close to the board. | Covers the WiFi bursts and may make a single cell sufficient. Test: one cell plus capacitor, ten cold boots, watch for resets. |
 | P2 | **Confirm the cell has a protection board**, and write the result into the checklist. | The guide's step 17 leaves this as "установи защиту пакета по документации". A protected pouch has a small PCB under yellow tape at the tab end. No PCB visible means treat it as unprotected and do not put it on a child. |
 | P3 | **Check which 3.3 V regulator your dev board has before trusting battery power.** | The battery goes into `5VIN`, so it passes through the board's regulator. Small boards usually carry a low-dropout part (ME6211 class, roughly 0.1–0.3 V drop). Many long DevKit clones carry an AMS1117, which needs about 1 V of headroom: a 3.7 V cell would give a 3V3 rail near 2.7 V and random resets. **Verify:** read the marking on the 3-pin/5-pin regulator near the USB port, and treat step 17's "3V3 = 3.2–3.4 V on battery" as a pass/fail gate, measured again with the cell near 3.5 V, not only when full. |
 | P4 | **Raise `BATT_LOW_V` from 3.30 to about 3.45 V.** | At a 3.30 V cell the regulator can no longer hold 3.3 V, so the cutoff fires after the rail has already sagged. Stopping earlier costs a few minutes and protects the file close. |
@@ -81,7 +82,7 @@ volume, one cell, no external charger, no harness.
 |---|------|------|-------|
 | 1 | **XIAO ESP32-S3 Plus** (16 MB flash) | about 21 × 18 mm | Has a LiPo charger and battery pads on the board, so the cell connects directly and charges over USB-C. **Verify** on the listing: "Plus", 16 MB flash, and that it is the XIAO form factor with `BAT+`/`BAT-` pads on the back. |
 | 2 | **GY-521 (MPU6050)** | 21 × 16 mm | Same as now, so no firmware change. Do not fit the header strip. |
-| 3 | **Protected 1S LiPo, 401730 / 402030 / 502030** (about 150–250 mAh) | up to 30 × 20 × 5 mm | Must show a protection PCB. Loose leads are fine; they solder to the XIAO pads. |
+| 3 | **One protected 1S LiPo of about 500–600 mAh** (for example 602030 or 552535), rated for at least 1 A | about 30 × 20 × 6 mm | Sized up because one 250 mAh cell was not enough on the current build. Must show a protection PCB. Loose leads solder to the XIAO pads. Add the 470 µF capacitor from P1b across `BAT+`/`BAT−`. Whether one cell is enough on this board is untested; if it is not, use the same permanent two-cell pack as in P1. |
 | 4 | **Slide switch SS12D00** or similar, 3-pin | about 9 × 4 mm | In the battery positive lead. |
 | 5 | 2 × 100 kΩ resistors, 1 × 100 nF capacitor | — | Battery divider, same as now. |
 | 6 | Polyfuse about 500 mA | — | In series with battery positive. |
@@ -210,12 +211,38 @@ crushing.
   breakout only if 16 MB is still too short, since it adds size and a
   connector that can shake loose.
 
+## Notes from the photo of the new unit (IMG_4498) and the "v1 blueprints" infographic
+
+- **Board:** "ESP32-S3 2025-V1.4", 44 pins, two USB-C ports (COM and USB-OTG).
+  The regulator is on the other side and is not visible, so P3 is still open.
+- **Joints:** the wires are twisted around the header pins and pushed through
+  the GY-521 holes; no solder is visible. A twisted joint in the power path
+  adds resistance and drops out under vibration, which looks exactly like
+  "not enough power". Solder every joint before judging the battery.
+- **Colours:** both sensor power wires are red and both signal wires are
+  black. Mark GND and SCL with tape before soldering.
+- **Infographic vs firmware.** Three items differ from the code and the
+  assembly guide; the code is what actually runs:
+
+  | Infographic | Firmware / guide |
+  |---|---|
+  | RGB status LED on GPIO15/16/17 | One WS2812 on GPIO48 (`PIN_LED`) |
+  | End-session button on GPIO5 | STOP on GPIO7 (guide step 12) |
+  | "No LED" while logging | Dim green heartbeat, blue above 3 g |
+
+  Its power wiring (LiPo → switch → `5V/VIN`, never to `3V3`), divider values,
+  GPIO4 range and the 5 kΩ / 250 mA charger note agree with the guide.
+
 ## Open questions
 
 1. What is in the video that the PDF does not show? A public or unlisted
    `youtube.com/watch?v=…` link will not open from this session either, so a
    few sentences or photos of the new version would let me check this document
    against it.
-2. Which regulator is on the current long dev board (P3)?
+2. Which regulator is on the current long dev board (P3)? A photo of the
+   component side near the USB ports would answer it.
+4. What exactly happens on one cell: resets at power-on, resets later, or too
+   short a runtime? The first two point to peak current (P1b, P3); the third
+   to capacity.
 3. How long must one recording be? 54 minutes on 16 MB is under a 90-minute
    session, which decides whether F6 is optional or required.
